@@ -41,7 +41,7 @@ Unless explicitly requested by the user, the agent must not:
 - Merge a feature branch directly into `prod`.
 - Merge changes into `dev` before review / acceptance is complete.
 - Reuse one feature branch for multiple unrelated missions.
-- Run destructive git operations.
+- Run destructive git operations outside the post-PR cleanup workflow below.
 
 ## Default Completion Workflow
 
@@ -58,7 +58,7 @@ Default completion steps:
 3. Stage only files that belong to the current task.
 4. Create a clear, terse commit.
 5. Push the current branch; if it has no upstream, push with upstream tracking.
-6. Open a GitHub draft PR targeting `dev`.
+6. Open a GitHub PR targeting `dev`; PRs should be ready for review by default, not draft, unless the user explicitly asks for a draft PR.
 7. Write a real PR body with change summary, rationale, validation evidence, skipped validation rationale if any, and remaining risks.
 8. Report the commit SHA, branch, PR URL, validation, and any skipped checks.
 
@@ -67,9 +67,34 @@ Stop and ask before publishing when:
 - The current branch is `dev`, `prod`, `main`, or `master`.
 - The working tree includes unrelated changes.
 - Validation fails in a way that is not an environment/tooling blocker.
-- The task requires destructive Git operations, branch deletion, default-branch changes, deploys, data deletion, or merges.
+- The task requires destructive Git operations outside post-PR cleanup, default-branch changes, deploys, data deletion, or merges.
 
-The agent must not automatically merge PRs, delete branches, change repository default branches, or run destructive Git commands unless the user explicitly asks for that operation.
+The agent must not automatically merge PRs, change repository default branches, or run destructive Git commands outside the post-PR cleanup workflow unless the user explicitly asks for that operation.
+
+## Post-PR Cleanup Workflow
+
+After a PR is merged into `dev`, or after the user confirms that the PR is finished, the agent should perform standard Git flow cleanup without waiting for a separate prompt when all of the following are true:
+
+- The current worktree is clean.
+- The PR head branch is a feature branch.
+- The PR was merged into `dev`, or the user explicitly says to clean up a closed / finished PR branch.
+
+Default cleanup steps:
+
+1. Fetch and prune remote refs.
+2. Check out local `dev`.
+3. Pull the latest `dev` from `origin` using fast-forward only.
+4. Delete the local feature branch only after it is merged or explicitly safe to remove.
+5. If the remote feature branch still exists and the PR was merged, delete the remote feature branch as part of cleanup.
+6. Report the final branch, latest `dev` commit, deleted branches, and any cleanup skipped.
+
+Stop and ask before cleanup when:
+
+- The working tree is dirty.
+- The PR is still open or unmerged.
+- The branch contains commits not merged into `dev`.
+- The branch is `dev`, `prod`, `main`, `master`, or another protected branch.
+- Fast-forward pull of `dev` fails.
 
 ## Validation Commands
 
