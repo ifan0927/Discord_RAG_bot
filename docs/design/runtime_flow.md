@@ -12,6 +12,7 @@
 - `raw_messages` 是真人訊息 source-of-truth。
 - `conversation_chunks` 與 `hourly_summaries` 由日終 batch 產生。
 - DDL 只能由明確 migration command 執行；bot 啟動與 Docker entrypoint 不自動套 schema。
+- model placeholder、answer/router prompt、normalization / eligibility、migration / CLI / Compose 與 structured log 合約見 `pre_implementation_contracts.md`。
 
 ## Mermaid Sequence
 
@@ -99,8 +100,8 @@ sequenceDiagram
 
 1. Discord `message_create` 進來後，先過濾 bot author、DM、thread、非指定 guild、非主要 channel。
 2. 真人主 channel 訊息嘗試 upsert `raw_messages`，timeout 2 秒；失敗或 timeout 只記 log，不阻塞 mention flow。
-3. `raw_content` 保留 Discord 原始 content，包含 mention token；`normalized_content` 保存清理後文字。
-4. `@bot` mention 訊息一律 `is_rag_eligible=false`；非 mention 真人訊息才依文字規則判定 eligibility。
+3. `raw_content` 保留 Discord 原始 content，包含 mention token；`normalized_content` 保存共用 normalization 規則清理後文字。
+4. `@bot` mention 訊息一律 `is_rag_eligible=false`；非 mention 真人訊息才依 `pre_implementation_contracts.md` 的共用 eligibility 規則判定。
 5. 非 `@bot` mention 真人訊息在 raw upsert 後結束，不進 session、不延長 timeout、不觸發 RAG/LLM。
 6. `@bot` mention 產生 UUID `request_id`，移除 bot mention token 後得到 `user_query`。
 7. 若 `user_query` 為空，固定回覆「你叫我了，但還沒給我問題。」；不建立或更新 session，不走 RAG/LLM。
@@ -203,8 +204,8 @@ RAG、partial RAG、no-context 一般回答都使用同一份 answer system prom
 | `EMBEDDING_MODEL` | `text-embedding-3-small` | env，但與 schema 維度耦合 |
 | `CHUNK_STRATEGY_VERSION` | required | env，缺失則啟動失敗 |
 | `SUMMARY_STRATEGY_VERSION` | required | env，缺失則啟動失敗 |
-| answer system prompt | repo text file | 修改後重啟 |
-| router prompt | repo text file | 修改後重啟 |
+| answer system prompt | repo text file | 修改後重啟；合約見 `pre_implementation_contracts.md` |
+| router prompt | repo text file | 修改後重啟；合約見 `pre_implementation_contracts.md` |
 
 `EMBEDDING_MODEL` 第一版不做任意切換；目前 DDL 使用 `vector(1536)`，與 `text-embedding-3-small` 相容。
 

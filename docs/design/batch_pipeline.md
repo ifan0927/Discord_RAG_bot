@@ -12,6 +12,8 @@
 - `conversation_chunks.chunk_key` 與 `hourly_summaries.summary_key` 是 deterministic artifact identity，不包含 `batch_id`。
 - `batch_id` 只用於排查來源，例如 `chunk-YYYY-MM-DD-rN`、`summary-YYYY-MM-DD-rN`。
 - `EMBEDDING_MODEL=text-embedding-3-small`，正式表 embedding 維度為 1536。
+- JSONL import 必須與 Discord runtime ingestion 共用 `pre_implementation_contracts.md` 的 normalization / eligibility 規則。
+- migration / CLI / Compose 與 structured log prohibited content 合約見 `pre_implementation_contracts.md`。
 
 ## Mermaid Flow
 
@@ -54,6 +56,7 @@ flowchart TD
 - `import-jsonl --input-dir ...`
   - 只匯入 JSONL 到 `raw_messages`。
   - 以 `message_id` upsert，重跑同一檔不產生重複 rows。
+  - 使用與 runtime ingestion 相同的 normalization / eligibility 規則。
 
 - `run-batch --date YYYY-MM-DD --only all|chunks|summaries [--dry-run]`
   - 處理指定 Asia/Taipei day。
@@ -163,7 +166,7 @@ summary prompt 約束：
 
 ## Model 與版本參數
 
-- `SUMMARY_MODEL=<to-be-selected>`；summary LLM model 由環境變數指定，實作前仍需選定具體 model id。
+- `SUMMARY_MODEL=<to-be-selected>`；summary LLM model 由環境變數指定，需由人明確選定具體 model id 後才可啟用 summary LLM calls。
 - `EMBEDDING_MODEL=text-embedding-3-small`；與正式表 `vector(1536)` 耦合，第一版不做任意切換。
 - `CHUNK_STRATEGY_VERSION` 與 `SUMMARY_STRATEGY_VERSION` 必須由環境變數提供，缺失時 batch command 應 fail fast。
 - chunk / summary / embedding / staging 參數以 `.env.example` 為設定清單，修改後由下一次 CLI run 生效；不做 DB config 或熱更新。
@@ -284,7 +287,7 @@ manifest 最低欄位：
 - fallback/truncation counts。
 - failed days for range runs。
 
-`errors.jsonl` 禁止寫完整 raw content，只記：
+`errors.jsonl` 禁止寫完整 raw content；其他 prohibited log content 見 `pre_implementation_contracts.md`。`errors.jsonl` 只記：
 
 - artifact key。
 - message ids / hour。
@@ -296,7 +299,7 @@ manifest 最低欄位：
 
 ## Usage Source
 
-第一版 `/usage` 資料來源是 structured JSON logs 的離線彙整。
+第一版 usage 觀察資料來源是 structured JSON logs 的離線彙整。
 
 - 不新增 DB usage table。
 - 不提供 bot 內即時 DB 查詢。
