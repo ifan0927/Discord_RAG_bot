@@ -196,7 +196,7 @@ summary prompt 約束：
 
 ## Model 與版本參數
 
-- `SUMMARY_MODEL=<to-be-selected>`；summary LLM model 由環境變數指定，需由人明確選定具體 model id 後才可啟用 summary LLM calls。
+- `SUMMARY_MODEL=gpt-5.4-nano`；summary LLM model 由環境變數指定，第一版 bounded trial 已批准使用此 model。
 - `EMBEDDING_MODEL=text-embedding-3-small`；與正式表 `vector(1536)` 耦合，第一版不做任意切換。
 - `CHUNK_STRATEGY_VERSION` 與 `SUMMARY_STRATEGY_VERSION` 必須由環境變數提供，缺失時 batch command 應 fail fast。
 - chunk / summary / embedding / staging 參數以 `.env.example` 為設定清單，修改後由下一次 CLI run 生效；不做 DB config 或熱更新。
@@ -236,6 +236,39 @@ chunks 與 summaries 共用 embedding 策略：
 - 不刪正式表。
 
 dry-run 只要計算成功就 exit 0，即使 expected artifacts 為 0；設定、DB 或參數錯誤才 exit non-zero。
+
+## Bounded Trial Scope
+
+第一版 RAG 工作流試跑不做完整歷史 backfill。已批准的 bounded trial selection rule：
+
+- 試跑資料範圍為 raw DB 內最新 30 個完整 Asia/Taipei 日。
+- 完整日定義為 `[D 00:00, D+1 00:00)`，且 `D+1 00:00` 必須早於試跑執行當下。
+- 若 raw DB 內不足 30 個完整日，使用所有可用完整日，並在 dry-run / manifest 記錄實際 start/end date。
+- 試跑只處理單一 guild / 單一主要 channel 的 `is_rag_eligible=true` 訊息。
+- 不補 Discord 缺口、不做全歷史 60 萬則 backfill、不擴大到 threads、DM、多 channel 或多 guild。
+
+試跑分成兩個 gate：
+
+1. Dry-run gate：必須先執行 `backfill --start ... --end ... --only all --dry-run`，確認日期範圍、eligible raw counts、expected chunk/summary counts、token/cost estimate 與設定皆可用。
+2. Real-run gate：只有 dry-run 成本估算小於或等於 `TRIAL_MAX_ESTIMATED_COST_USD`，且操作者明確確認後，才允許執行 real API-backed backfill。
+
+第一輪 real trial 的外部 API policy：
+
+- 允許呼叫 OpenAI embedding API，model 固定 `text-embedding-3-small`。
+- 允許 summary LLM calls，model 固定 `gpt-5.4-nano`；summary LLM 失敗時仍依既有規則 fallback 到 raw lines。
+- runtime answer / fallback / router LLM calls 已批准 model IDs，但 runtime RAG bot 仍需等對應 implementation issue 實作後才可啟用。
+- 不呼叫 OpenAI Batch API。
+- 不呼叫 Discord API、不中斷或補抓 Discord 歷史、不跑 migration、不啟動 runtime bot。
+
+目前批准的 trial cost gate 初始值為 `TRIAL_MAX_ESTIMATED_COST_USD=5.00`。若 dry-run cost 欄位因單價缺失而為 `unknown`，不得進入 real-run gate；必須先補齊 `.env` 的 embedding 單價或由操作者重新批准。
+
+本 trial 成功條件：
+
+- dry-run 明確輸出實際 start/end date、eligible raw counts、expected chunks、expected summaries 與 estimated cost。
+- real run 若被批准，完成最新 30 個完整 Asia/Taipei 日或所有可用完整日，且 failed day 為 0。
+- chunks 與 summaries 的 manifest 狀態為 `success` 或無資料日為 `success_empty`。
+- staging manifest、structured logs 與 `errors.jsonl` 不包含完整 prompt、完整 raw content、Discord token、OpenAI API key 或完整 DB connection string。
+- 試跑結束後可用 `check-batch --date YYYY-MM-DD --json` 對範圍內任一成功日取得通過結果。
 
 ## Cost Estimate
 

@@ -2,7 +2,7 @@
 
 這份文件是目前的產品收斂紀錄。它整理第一版產品方向與邊界，避免後續討論回到已排除範圍。
 
-目前程式碼只保留最小 Discord bot skeleton；schema、runtime request flow 與 batch pipeline 已另行收斂，但尚未實作。本文只保存產品邊界、已排除範圍與文件索引；技術細節以 `ddl.md`、`runtime_flow.md`、`batch_pipeline.md` 與 `rag_schema.sql` 為準。
+目前程式碼只保留最小 Discord bot skeleton；schema、runtime request flow、batch pipeline 與 bounded trial scope 已另行收斂，但尚未實作。本文只保存產品邊界、已排除範圍與文件索引；技術細節以 `ddl.md`、`runtime_flow.md`、`batch_pipeline.md` 與 `rag_schema.sql` 為準。
 
 ## 1. 產品定位
 
@@ -58,10 +58,11 @@
 
 ## 6. 工程與成本邊界
 
-- embedding model 固定為 `text-embedding-3-small`；answer/router/fallback/summary 模型保持 `<to-be-selected>`，必須由人明確選定後才可啟用對應 LLM calls。
+- embedding model 固定為 `text-embedding-3-small`；第一版已批准 `ANSWER_MODEL=gpt-5.4-mini`、`FALLBACK_MODEL=gpt-5.4-nano`、`ROUTER_MODEL=gpt-5.4-nano`、`SUMMARY_MODEL=gpt-5.4-nano`。
 - answer/router prompt 會以 repo 內固定文字檔管理；prompt 合約見 `runtime_flow.md`。summary prompt 約束由 `batch_pipeline.md` 記錄，第一版不做 prompt 管理系統或熱更新。
 - runtime context window、檢索數量、timeout 與 token 上限已在 `runtime_flow.md` 收斂為環境變數。
 - 第一版成本與用量觀察依 structured JSON logs 離線彙整，不先提供 Discord 內 `/usage`。
+- 第一版 bounded trial 不做完整歷史 backfill；試跑範圍、API policy、dry-run / cost gate 與成功條件由 `batch_pipeline.md` 管理。
 - request log 與 batch log 需要記錄模型名稱、token usage、cost metadata 與 failure flags；不新增 DB request log、usage table 或 `batch_runs` table。
 - request log / errors log 禁止寫完整 prompt、retrieved text 或 raw content，只記 metadata、keys、狀態摘要與錯誤摘要。
 - fallback 策略已收斂：RAG/session 失敗可一般回答，LLM/API 最終失敗才回固定錯誤文案。
@@ -100,9 +101,10 @@
 
 ## 10. 實作前合約狀態
 
-- answer / fallback / router / summary model 名稱：保持 `<to-be-selected>`，需由人明確選定。
+- answer / fallback / router / summary model 名稱：已批准為 `gpt-5.4-mini` / `gpt-5.4-nano` / `gpt-5.4-nano` / `gpt-5.4-nano`；bounded trial 第一輪 real batch 允許 `text-embedding-3-small` embedding 與 `gpt-5.4-nano` summary LLM，runtime LLM calls 需等 runtime RAG implementation issue 實作後才啟用。
 - answer system prompt 與 router prompt：合約已收斂於 `runtime_flow.md`；實際 prompt 檔尚未實作。
 - JSONL import 與 Discord runtime 共用的 normalization / eligibility 規則：已收斂於 `runtime_flow.md`。
 - migration command 與 CLI entrypoint 邊界：已收斂於 `batch_pipeline.md`。
+- bounded trial selection rule：raw DB 內最新 30 個完整 Asia/Taipei 日，不足 30 日則使用所有可用完整日；必須先通過 dry-run 與 cost gate。
 - Docker Compose：下一個 implementation slice 可加入 PostgreSQL + pgvector service；不得自動 migration。
 - structured logs：runtime log 合約見 `runtime_flow.md`；batch log、manifest 與 `errors.jsonl` 合約見 `batch_pipeline.md`。
