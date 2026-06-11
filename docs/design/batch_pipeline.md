@@ -196,7 +196,7 @@ summary prompt 約束：
 
 ## Model 與版本參數
 
-- `SUMMARY_MODEL=<to-be-selected>`；summary LLM model 由環境變數指定，需由人明確選定具體 model id 後才可啟用 summary LLM calls。
+- `SUMMARY_MODEL=gpt-5.4-nano`；summary LLM model 由環境變數指定，第一版 bounded trial 已批准使用此 model。
 - `EMBEDDING_MODEL=text-embedding-3-small`；與正式表 `vector(1536)` 耦合，第一版不做任意切換。
 - `CHUNK_STRATEGY_VERSION` 與 `SUMMARY_STRATEGY_VERSION` 必須由環境變數提供，缺失時 batch command 應 fail fast。
 - chunk / summary / embedding / staging 參數以 `.env.example` 為設定清單，修改後由下一次 CLI run 生效；不做 DB config 或熱更新。
@@ -255,8 +255,8 @@ dry-run 只要計算成功就 exit 0，即使 expected artifacts 為 0；設定�
 第一輪 real trial 的外部 API policy：
 
 - 允許呼叫 OpenAI embedding API，model 固定 `text-embedding-3-small`。
-- `SUMMARY_MODEL` 保持 `<to-be-selected>` 時，不允許 summary LLM calls；summary pipeline 必須使用 raw-lines fallback。
-- `ANSWER_MODEL`、`FALLBACK_MODEL`、`ROUTER_MODEL` 保持 `<to-be-selected>` 時，不允許 runtime answer / fallback / router LLM calls。
+- 允許 summary LLM calls，model 固定 `gpt-5.4-nano`；summary LLM 失敗時仍依既有規則 fallback 到 raw lines。
+- runtime answer / fallback / router LLM calls 已批准 model IDs，但 runtime RAG bot 仍需等對應 implementation issue 實作後才可啟用。
 - 不呼叫 OpenAI Batch API。
 - 不呼叫 Discord API、不中斷或補抓 Discord 歷史、不跑 migration、不啟動 runtime bot。
 

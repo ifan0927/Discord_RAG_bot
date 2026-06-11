@@ -11,9 +11,9 @@ RAG schema 設計見 [docs/design/ddl.md](docs/design/ddl.md) 與 [docs/design/r
 
 ## 文件狀態
 
-- 已收斂：產品邊界、schema、runtime flow、batch/backfill flow、bounded trial selection rule、model placeholder、prompt 合約、normalization / eligibility、migration / CLI / Compose 邊界、structured logs。
-- 試跑 gate：最新 30 個完整 Asia/Taipei 日；第一輪 real batch 只允許 embedding API，summary LLM 與 runtime LLM calls 仍 blocked；必須先通過 dry-run 與成本上限。
-- 尚待人為選定：answer/router/fallback/summary concrete model IDs。
+- 已收斂：產品邊界、schema、runtime flow、batch/backfill flow、bounded trial selection rule、trial model IDs、prompt 合約、normalization / eligibility、migration / CLI / Compose 邊界、structured logs。
+- 試跑 gate：最新 30 個完整 Asia/Taipei 日；第一輪 real batch 允許 embedding API 與 summary LLM；必須先通過 dry-run 與成本上限。
+- 已批准模型：answer 使用 `gpt-5.4-mini`；fallback、router、summary 使用 `gpt-5.4-nano`；embedding 使用 `text-embedding-3-small`。
 - 尚待實作：prompt 檔、normalization / eligibility function、migration command、CLI entrypoint、Docker Compose DB service、runtime RAG、batch/import。
 
 ## 本機啟動

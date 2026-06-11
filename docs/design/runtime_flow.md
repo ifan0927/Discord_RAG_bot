@@ -12,7 +12,7 @@
 - `raw_messages` 是真人訊息 source-of-truth。
 - `conversation_chunks` 與 `hourly_summaries` 由日終 batch 產生。
 - DDL 只能由明確 migration command 執行；bot 啟動與 Docker entrypoint 不自動套 schema。
-- model placeholder、answer/router prompt、normalization / eligibility 與 runtime structured log 合約由本文件管理；batch、CLI、migration 與 Compose 邊界見 `batch_pipeline.md`。
+- model selection、answer/router prompt、normalization / eligibility 與 runtime structured log 合約由本文件管理；batch、CLI、migration 與 Compose 邊界見 `batch_pipeline.md`。
 
 ## Mermaid Sequence
 
@@ -301,9 +301,9 @@ Normalization 不做品質評分、禁用詞清單、inside joke 清單、人格
 
 | 參數 | 初始值 | 調整方式 |
 |---|---|---|
-| `ANSWER_MODEL` | `<to-be-selected>` | env |
-| `FALLBACK_MODEL` | `<to-be-selected>` | env |
-| `ROUTER_MODEL` | `<to-be-selected>` | env |
+| `ANSWER_MODEL` | `gpt-5.4-mini` | env |
+| `FALLBACK_MODEL` | `gpt-5.4-nano` | env |
+| `ROUTER_MODEL` | `gpt-5.4-nano` | env |
 | `EMBEDDING_MODEL` | `text-embedding-3-small` | env，但與 schema 維度耦合 |
 | `CHUNK_STRATEGY_VERSION` | required | env，缺失則啟動失敗 |
 | `SUMMARY_STRATEGY_VERSION` | required | env，缺失則啟動失敗 |
