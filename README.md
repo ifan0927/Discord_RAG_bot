@@ -12,7 +12,7 @@ RAG schema 設計見 [docs/design/ddl.md](docs/design/ddl.md) 與 [docs/design/r
 ## 文件狀態
 
 - 已收斂：產品邊界、schema、runtime flow、batch/backfill flow。
-- 尚待實作前補齊：answer/router/fallback model、prompt 檔、normalization / eligibility 規則、migration command、CLI entrypoint、Docker Compose DB service。
+- 尚待實作前補齊：answer/router/fallback/summary model、prompt 檔、normalization / eligibility 規則、migration command、CLI entrypoint、Docker Compose DB service。
 
 ## 本機啟動
 

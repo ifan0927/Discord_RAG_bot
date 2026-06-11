@@ -2,7 +2,7 @@
 
 這份文件是目前的產品收斂紀錄。它整理第一版產品方向與邊界，避免後續討論回到已排除範圍。
 
-目前程式碼只保留最小 Discord bot skeleton；schema、runtime request flow、batch pipeline 已另行收斂，但尚未實作。技術細節以 `ddl.md`、`runtime_flow.md`、`batch_pipeline.md` 與 `rag_schema.sql` 為準。
+目前程式碼只保留最小 Discord bot skeleton；schema、runtime request flow、batch pipeline 已另行收斂，但尚未實作。本文只保存產品邊界、已排除範圍與文件索引；技術細節以 `ddl.md`、`runtime_flow.md`、`batch_pipeline.md` 與 `rag_schema.sql` 為準。
 
 ## 1. 產品定位
 
@@ -19,6 +19,7 @@
 - 主要入口是 `@bot` mention。
 - 只支援單一 guild / 單一主要 channel。
 - 不支援 DM。
+- 第一版 runtime 忽略 Discord threads；schema 內保留 `sessions.thread_id` 只是資料結構預留，不代表第一版產品支援 thread 互動。
 - 不做主動插話、主動摘要、每日報告或定時報告。
 - 目前 skeleton 不保留 slash command；若未來要恢復 `/usage` 或其他管理入口，需重新收斂後再落地。
 
@@ -39,6 +40,8 @@
 - 第一版只處理文字對話紀錄。
 - 不處理圖片、附件、Discord 貼圖、表情貼或圖片理解。
 - 不補 reactions、reply chain 或互動圖譜。
+- 所有 bot authored message 都忽略，不寫入 raw、不進 RAG。
+- 真人 `@bot` mention 訊息可以寫入 raw archive，但一律 `is_rag_eligible=false`，避免使用者提問本身污染長期群組記憶。
 - 假設群組成員同意收錄；不做 opt-out。
 - 需要基本規則式排除干擾訊息，例如其他 bot、空訊息、純 mention、純貼圖/表情；具體 normalization / eligibility 規則仍待實作前補齊。
 - 不做複雜品質分類、人工標註、人工審核、禁用詞清單或 inside joke 清單。
@@ -50,14 +53,17 @@
 - 未來可使用群組記憶強化聊天，但不應把它包裝成可驗證引用工具。
 - 短期上下文使用 `sessions`；長期群組記憶使用 `raw_messages` 經 batch 產生的 `conversation_chunks` 與 `hourly_summaries`。
 - 新訊息 runtime 只即時寫入 raw；embedding、chunk、summary 由日終 batch 產生。
+- retrieval 採 summary-first hybrid：先查 `hourly_summaries`，再取時間對齊 chunks，另以 global chunks 作為 summary miss fallback。
+- active session 預設沿用上一輪 retrieval context，只有 router 判定需要時才重查 RAG；session DB、RAG 或 retrieval partial failure 可降級成一般 AI 回答。
 
 ## 6. 工程與成本邊界
 
-- embedding model 固定為 `text-embedding-3-small`；answer/router/fallback 模型仍待選定。
-- prompt 會以 repo 內固定文字檔管理；具體 prompt 內容仍待補齊。
+- embedding model 固定為 `text-embedding-3-small`；answer/router/fallback/summary 模型仍待選定。
+- answer/router prompt 會以 repo 內固定文字檔管理；具體 prompt 內容仍待補齊。summary prompt 約束由 `batch_pipeline.md` 記錄，第一版不做 prompt 管理系統或熱更新。
 - runtime context window、檢索數量、timeout 與 token 上限已在 `runtime_flow.md` 收斂為環境變數。
 - 第一版成本與用量觀察依 structured JSON logs 離線彙整，不先提供 Discord 內 `/usage`。
-- request log 與 batch log 需要記錄模型名稱、token usage、cost metadata 與 failure flags；不新增 DB request log / usage table。
+- request log 與 batch log 需要記錄模型名稱、token usage、cost metadata 與 failure flags；不新增 DB request log、usage table 或 `batch_runs` table。
+- request log / errors log 禁止寫完整 prompt、retrieved text 或 raw content，只記 metadata、keys、狀態摘要與錯誤摘要。
 - fallback 策略已收斂：RAG/session 失敗可一般回答，LLM/API 最終失敗才回固定錯誤文案。
 - 不做離線評測、測試問題集或品質 benchmark；品質主要靠實際群組使用與 logs 觀察。
 - 仍保留基本單元測試，保障程式骨架品質。
@@ -94,7 +100,7 @@
 
 ## 10. 仍待補齊的實作前缺口
 
-- answer / fallback / router model 名稱。
+- answer / fallback / router / summary model 名稱。
 - answer system prompt 與 router prompt 檔案內容。
 - JSONL import 與 Discord runtime 共用的 normalization / eligibility 規則。
 - migration command 與 CLI entrypoint 檔案結構。

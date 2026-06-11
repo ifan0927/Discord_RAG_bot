@@ -161,6 +161,13 @@ summary prompt 約束：
 - 不包含 `batch_id`。
 - 不包含 summary text hash、fallback 狀態或 truncation 狀態。
 
+## Model 與版本參數
+
+- `SUMMARY_MODEL=<to-be-selected>`；summary LLM model 由環境變數指定，實作前仍需選定具體 model id。
+- `EMBEDDING_MODEL=text-embedding-3-small`；與正式表 `vector(1536)` 耦合，第一版不做任意切換。
+- `CHUNK_STRATEGY_VERSION` 與 `SUMMARY_STRATEGY_VERSION` 必須由環境變數提供，缺失時 batch command 應 fail fast。
+- chunk / summary / embedding / staging 參數以 `.env.example` 為設定清單，修改後由下一次 CLI run 生效；不做 DB config 或熱更新。
+
 ## Embedding Pipeline
 
 chunks 與 summaries 共用 embedding 策略：
