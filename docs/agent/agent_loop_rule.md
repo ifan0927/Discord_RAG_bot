@@ -154,7 +154,17 @@ Implementation Loop may use worker subagents, but each worker must have a clear 
    - If validation fails, make focused repairs only.
    - Stop and report if the same failure does not converge after two repair rounds.
 
-8. Evidence Report
+8. Internal Code Review
+   - Required when the implementation loop creates any code diff.
+   - A fresh-context subagent must review the code diff before the loop can be considered complete.
+   - The coordinator must not approve its own code diff without this review.
+   - The review must check mission scope, source-of-truth compliance, behavior bugs, test gaps, scope creep, and maintainability risks.
+   - Review findings must be triaged as blocking or non-blocking.
+   - Blocking findings must be fixed, validated, and sent through another internal code review round.
+   - Non-blocking findings may be reported as remaining risk and do not block completion.
+   - The implementation loop is complete only when validation passes and there are no blocking review findings.
+
+9. Evidence Report
    - Report what was read, changed, validated, skipped, and what risk remains.
 
 ## Stop Conditions
@@ -170,6 +180,7 @@ The agent must stop and ask the user when:
 - The work must enter Out of Scope to complete the mission.
 - Validation does not exist, or validation results contradict the mission goal.
 - Destructive action, deployment, data deletion, or permission changes are required but not authorized.
+- An internal code review finding requires entering Out of Scope, changing source-of-truth decisions, or deciding product, provider, model, DB, data lifecycle, or cross-module contracts.
 
 ### Soft Stop / Report
 
@@ -180,6 +191,7 @@ The agent may summarize evidence and ask whether to continue when:
 - The diff is growing beyond the expected slice.
 - An unrelated issue is discovered.
 - Validation can only be partially executed.
+- Blocking internal code review findings do not converge after two focused repair rounds.
 
 ## Evidence Format
 
