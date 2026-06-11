@@ -111,6 +111,20 @@ If `.venv` is missing or dependencies are not installed, report the actual block
 
 An implementation issue may include small documentation updates directly related to the behavior being changed.
 
+Before changing any `docs/design/*` file, read and check the full current design-doc set for alignment:
+
+- `docs/design/bot_llm.md`
+- `docs/design/runtime_flow.md`
+- `docs/design/batch_pipeline.md`
+- `docs/design/ddl.md`
+- `docs/design/rag_schema.sql`
+
+Also check `.env.example` and `README.md` when the change affects config, public status, or document entrypoints.
+
+Design docs should be updated by converging existing docs first, not by creating parallel catch-all docs by default.
+
+If the current edit creates inconsistency, align that inconsistency in the same issue when it is within scope. If an inconsistency is pre-existing, unrelated, or requires a product / provider / model / DB / data lifecycle / cross-module decision outside the issue, stop and ask the user.
+
 Do not opportunistically:
 
 - Redesign runtime / batch flow.

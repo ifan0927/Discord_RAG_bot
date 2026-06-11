@@ -2,7 +2,7 @@
 
 這份文件是目前的產品收斂紀錄。它整理第一版產品方向與邊界，避免後續討論回到已排除範圍。
 
-目前程式碼只保留最小 Discord bot skeleton；schema、runtime request flow、batch pipeline 與第一批實作前合約已另行收斂，但尚未實作。本文只保存產品邊界、已排除範圍與文件索引；技術細節以 `ddl.md`、`runtime_flow.md`、`batch_pipeline.md`、`pre_implementation_contracts.md` 與 `rag_schema.sql` 為準。
+目前程式碼只保留最小 Discord bot skeleton；schema、runtime request flow 與 batch pipeline 已另行收斂，但尚未實作。本文只保存產品邊界、已排除範圍與文件索引；技術細節以 `ddl.md`、`runtime_flow.md`、`batch_pipeline.md` 與 `rag_schema.sql` 為準。
 
 ## 1. 產品定位
 
@@ -43,7 +43,7 @@
 - 所有 bot authored message 都忽略，不寫入 raw、不進 RAG。
 - 真人 `@bot` mention 訊息可以寫入 raw archive，但一律 `is_rag_eligible=false`，避免使用者提問本身污染長期群組記憶。
 - 假設群組成員同意收錄；不做 opt-out。
-- 需要基本規則式排除干擾訊息，例如其他 bot、空訊息、純 mention、純貼圖/表情；具體 normalization / eligibility 規則見 `pre_implementation_contracts.md`。
+- 需要基本規則式排除干擾訊息，例如其他 bot、空訊息、純 mention、純貼圖/表情；具體 normalization / eligibility 規則見 `runtime_flow.md`。
 - 不做複雜品質分類、人工標註、人工審核、禁用詞清單或 inside joke 清單。
 
 ## 5. RAG 與上下文邊界
@@ -59,7 +59,7 @@
 ## 6. 工程與成本邊界
 
 - embedding model 固定為 `text-embedding-3-small`；answer/router/fallback/summary 模型保持 `<to-be-selected>`，必須由人明確選定後才可啟用對應 LLM calls。
-- answer/router prompt 會以 repo 內固定文字檔管理；prompt 合約見 `pre_implementation_contracts.md`。summary prompt 約束由 `batch_pipeline.md` 記錄，第一版不做 prompt 管理系統或熱更新。
+- answer/router prompt 會以 repo 內固定文字檔管理；prompt 合約見 `runtime_flow.md`。summary prompt 約束由 `batch_pipeline.md` 記錄，第一版不做 prompt 管理系統或熱更新。
 - runtime context window、檢索數量、timeout 與 token 上限已在 `runtime_flow.md` 收斂為環境變數。
 - 第一版成本與用量觀察依 structured JSON logs 離線彙整，不先提供 Discord 內 `/usage`。
 - request log 與 batch log 需要記錄模型名稱、token usage、cost metadata 與 failure flags；不新增 DB request log、usage table 或 `batch_runs` table。
@@ -97,13 +97,12 @@
 - `rag_schema.sql`：第一版 PostgreSQL + pgvector DDL。
 - `runtime_flow.md`：`@bot` mention request flow、session、retrieval、fallback、設定參數。
 - `batch_pipeline.md`：JSONL import、日終 batch、backfill、staging、observability。
-- `pre_implementation_contracts.md`：model placeholder、prompt、normalization / eligibility、migration / CLI / Compose 與 structured logs 合約。
 
 ## 10. 實作前合約狀態
 
 - answer / fallback / router / summary model 名稱：保持 `<to-be-selected>`，需由人明確選定。
-- answer system prompt 與 router prompt：合約已收斂於 `pre_implementation_contracts.md`；實際 prompt 檔尚未實作。
-- JSONL import 與 Discord runtime 共用的 normalization / eligibility 規則：已收斂於 `pre_implementation_contracts.md`。
-- migration command 與 CLI entrypoint 邊界：已收斂於 `pre_implementation_contracts.md`。
+- answer system prompt 與 router prompt：合約已收斂於 `runtime_flow.md`；實際 prompt 檔尚未實作。
+- JSONL import 與 Discord runtime 共用的 normalization / eligibility 規則：已收斂於 `runtime_flow.md`。
+- migration command 與 CLI entrypoint 邊界：已收斂於 `batch_pipeline.md`。
 - Docker Compose：下一個 implementation slice 可加入 PostgreSQL + pgvector service；不得自動 migration。
-- structured logs：runtime / batch minimum fields 與 prohibited content 已收斂於 `pre_implementation_contracts.md`，batch 細節仍以 `batch_pipeline.md` 為準。
+- structured logs：runtime log 合約見 `runtime_flow.md`；batch log、manifest 與 `errors.jsonl` 合約見 `batch_pipeline.md`。

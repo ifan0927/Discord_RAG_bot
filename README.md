@@ -8,7 +8,6 @@ Discord 群組強化 AI bot 的最小 skeleton。
 RAG schema 設計見 [docs/design/ddl.md](docs/design/ddl.md) 與 [docs/design/rag_schema.sql](docs/design/rag_schema.sql)。
 `@bot` mention runtime 請求流程見 [docs/design/runtime_flow.md](docs/design/runtime_flow.md)。
 日終批次、歷史 backfill 與 observability 設計見 [docs/design/batch_pipeline.md](docs/design/batch_pipeline.md)。
-第一批實作前合約見 [docs/design/pre_implementation_contracts.md](docs/design/pre_implementation_contracts.md)。
 
 ## 文件狀態
 

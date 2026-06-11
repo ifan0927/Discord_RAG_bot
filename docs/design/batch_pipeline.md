@@ -12,8 +12,8 @@
 - `conversation_chunks.chunk_key` 與 `hourly_summaries.summary_key` 是 deterministic artifact identity，不包含 `batch_id`。
 - `batch_id` 只用於排查來源，例如 `chunk-YYYY-MM-DD-rN`、`summary-YYYY-MM-DD-rN`。
 - `EMBEDDING_MODEL=text-embedding-3-small`，正式表 embedding 維度為 1536。
-- JSONL import 必須與 Discord runtime ingestion 共用 `pre_implementation_contracts.md` 的 normalization / eligibility 規則。
-- migration / CLI / Compose 與 structured log prohibited content 合約見 `pre_implementation_contracts.md`。
+- JSONL import 必須與 Discord runtime ingestion 共用 `runtime_flow.md` 的 normalization / eligibility 規則。
+- migration / CLI / Compose 與 batch structured log 合約由本文件管理。
 
 ## Mermaid Flow
 
@@ -74,6 +74,36 @@ flowchart TD
 
 - `cleanup-batches --older-than-days N`
   - 清理超過 retention 的 staging run directories。
+
+第一版可新增單一 CLI entrypoint，例如：
+
+```bash
+python -m src.cli <command> [options]
+```
+
+實作時可以調整 Python module path，但 command 語意不得把 bot runtime、batch、migration 混在同一個自動流程。
+
+## Migration / Compose Boundary
+
+Schema 只能由明確 CLI command 套用；bot startup 與 Docker entrypoint 不自動 migration。
+
+Migration command boundary：
+
+- `migrate up` 套用 `docs/design/rag_schema.sql` 對應的 schema。
+- `migrate check` 檢查 DB extension/table/index 是否符合第一版 schema。
+- Migration command 不啟動 Discord bot。
+- Batch/import command 不自動套 schema；schema 不存在時 fail fast。
+- Migration 只處理第一版 schema，不同時做 backfill、embedding、summary 或 provider calls。
+
+下一個 implementation slice 可以在 `docker-compose.yml` 加入 PostgreSQL + pgvector service，供本機開發與測試使用。
+
+Compose service boundary：
+
+- 可使用 pgvector image。
+- 可提供 healthcheck。
+- 可讓 bot service 透過 `DATABASE_URL` 連線。
+- 不在 DB service 或 bot service entrypoint 自動套用 `rag_schema.sql`。
+- 不加入外部向量資料庫、dashboard、scheduler、admin UI 或 production deployment 設定。
 
 ## Day Boundary 與 Rerun
 
@@ -287,7 +317,9 @@ manifest 最低欄位：
 - fallback/truncation counts。
 - failed days for range runs。
 
-`errors.jsonl` 禁止寫完整 raw content；其他 prohibited log content 見 `pre_implementation_contracts.md`。`errors.jsonl` 只記：
+Batch logs、manifest 與 `errors.jsonl` 禁止寫完整 prompt、完整 retrieved text、完整 `raw_content` 或 `normalized_content`、Discord token、OpenAI API key、DB password、完整 connection string、未截斷的 provider request / response body。
+
+`errors.jsonl` 只記：
 
 - artifact key。
 - message ids / hour。
