@@ -1,7 +1,30 @@
 services:
+  db:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: group_memory_bot
+      POSTGRES_USER: group_memory_bot
+      POSTGRES_PASSWORD: group_memory_bot
+    ports:
+      - "55432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U group_memory_bot -d group_memory_bot"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
   bot:
     build: .
     restart: unless-stopped
     env_file:
       - path: .env
         required: false
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
