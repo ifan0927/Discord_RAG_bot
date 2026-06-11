@@ -23,6 +23,16 @@ cp .env.example .env
 docker compose up --build
 ```
 
+## Schema migration
+
+Schema 只會透過明確指令套用；bot startup 與 Docker entrypoint 不會自動執行 migration。
+
+```bash
+docker compose up -d db
+./.venv/bin/python -m src.cli migrate up
+./.venv/bin/python -m src.cli migrate check
+```
+
 ## 驗證
 
 ```bash
