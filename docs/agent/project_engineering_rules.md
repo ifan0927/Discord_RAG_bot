@@ -43,6 +43,34 @@ Unless explicitly requested by the user, the agent must not:
 - Reuse one feature branch for multiple unrelated missions.
 - Run destructive git operations.
 
+## Default Completion Workflow
+
+After completing a docs, implementation, bugfix, or ops / validation task, the agent should publish the result without waiting for a separate "commit / push / PR" prompt when all of the following are true:
+
+- The current branch is a feature branch, not `dev`, `prod`, `main`, or `master`.
+- The working tree contains only changes that belong to the current task.
+- The smallest useful validation has passed, or the validation blocker is explicit and acceptable to report.
+
+Default completion steps:
+
+1. Run `git status --short --branch` and inspect the diff.
+2. Run the smallest useful validation; docs-only work must at least run `git diff --check`.
+3. Stage only files that belong to the current task.
+4. Create a clear, terse commit.
+5. Push the current branch; if it has no upstream, push with upstream tracking.
+6. Open a GitHub draft PR targeting `dev`.
+7. Write a real PR body with change summary, rationale, validation evidence, skipped validation rationale if any, and remaining risks.
+8. Report the commit SHA, branch, PR URL, validation, and any skipped checks.
+
+Stop and ask before publishing when:
+
+- The current branch is `dev`, `prod`, `main`, or `master`.
+- The working tree includes unrelated changes.
+- Validation fails in a way that is not an environment/tooling blocker.
+- The task requires destructive Git operations, branch deletion, default-branch changes, deploys, data deletion, or merges.
+
+The agent must not automatically merge PRs, delete branches, change repository default branches, or run destructive Git commands unless the user explicitly asks for that operation.
+
 ## Validation Commands
 
 Current minimal local validation:
