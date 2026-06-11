@@ -14,7 +14,7 @@ RAG schema 設計見 [docs/design/ddl.md](docs/design/ddl.md) 與 [docs/design/r
 - 已收斂：產品邊界、schema、runtime flow、batch/backfill flow、bounded trial selection rule、trial model IDs、prompt 合約、normalization / eligibility、migration / CLI / Compose 邊界、structured logs。
 - 試跑 gate：最新 30 個完整 Asia/Taipei 日；第一輪 real batch 允許 embedding API 與 summary LLM；必須先通過 dry-run 與成本上限。
 - 已批准模型：answer 使用 `gpt-5.4-mini`；fallback、router、summary 使用 `gpt-5.4-nano`；embedding 使用 `text-embedding-3-small`。
-- 尚待實作：prompt 檔、normalization / eligibility function、migration command、CLI entrypoint、Docker Compose DB service、runtime RAG、batch/import。
+- 尚待實作：prompt 檔、runtime RAG、batch artifact generation、backfill/check/cleanup commands。
 
 ## 本機啟動
 
@@ -31,6 +31,14 @@ Schema 只會透過明確指令套用；bot startup 與 Docker entrypoint 不會
 docker compose up -d db
 ./.venv/bin/python -m src.cli migrate up
 ./.venv/bin/python -m src.cli migrate check
+```
+
+## JSONL import
+
+歷史 JSONL 匯入只寫入 `raw_messages`，不產生 chunks、summaries、embeddings 或 LLM/provider calls。
+
+```bash
+./.venv/bin/python -m src.cli import-jsonl --input-dir exports/channel_123 --bot-user-id 999
 ```
 
 ## 驗證
