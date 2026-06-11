@@ -1,9 +1,17 @@
 # AGENTS.md
 
 Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.
-all the conversation with user use Traditional Chinese
+
+All user-facing conversation must use Traditional Chinese.
 
 **Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
+
+## Project Rules
+
+- When opening or executing an issue / mission, follow `docs/agent/mission_issue_rule.md`.
+- When drafting, executing, or reviewing agent loops, follow `docs/agent/agent_loop_rule.md`.
+- When reviewing PRs or accepting completed work, follow `docs/agent/review_acceptance_rule.md`.
+- For project coding, test, and Git flow conventions, follow `docs/agent/project_engineering_rules.md`.
 
 ## 1. Think Before Coding
 
@@ -64,4 +72,3 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 ---
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
-

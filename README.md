@@ -4,10 +4,10 @@ Discord 群組強化 AI bot 的最小 skeleton。
 
 目前程式碼只保留 bot 啟動與 `@bot` mention 占位回覆。RAG schema、runtime request flow 與 batch pipeline 已完成文件收斂，但尚未實作到程式碼。
 
-產品範圍收斂紀錄見 [bot_llm.md](bot_llm.md)。
-RAG schema 設計見 [ddl.md](ddl.md) 與 [rag_schema.sql](rag_schema.sql)。
-`@bot` mention runtime 請求流程見 [runtime_flow.md](runtime_flow.md)。
-日終批次、歷史 backfill 與 observability 設計見 [batch_pipeline.md](batch_pipeline.md)。
+產品範圍收斂紀錄見 [docs/design/bot_llm.md](docs/design/bot_llm.md)。
+RAG schema 設計見 [docs/design/ddl.md](docs/design/ddl.md) 與 [docs/design/rag_schema.sql](docs/design/rag_schema.sql)。
+`@bot` mention runtime 請求流程見 [docs/design/runtime_flow.md](docs/design/runtime_flow.md)。
+日終批次、歷史 backfill 與 observability 設計見 [docs/design/batch_pipeline.md](docs/design/batch_pipeline.md)。
 
 ## 文件狀態
 
