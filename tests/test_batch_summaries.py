@@ -281,18 +281,21 @@ class BatchSummariesTest(unittest.TestCase):
         fake_result = mock.Mock()
         fake_result.status = "success"
         fake_result.to_json.return_value = json.dumps({"status": "success"})
+        summary_provider = mock.Mock()
 
         with mock.patch.dict("os.environ", {"DATABASE_URL": "postgresql://local/test"}):
             with mock.patch("src.cli._embedding_provider_from_env", return_value=mock.Mock()):
-                with mock.patch("src.cli.run_summaries_batch", return_value=fake_result) as summaries_batch:
-                    output = io.StringIO()
-                    with redirect_stdout(output):
-                        exit_code = cli.main(["run-batch", "--date", "2026-06-10", "--only", "summaries"])
+                with mock.patch("src.cli._summary_provider_from_env", return_value=summary_provider):
+                    with mock.patch("src.cli.run_summaries_batch", return_value=fake_result) as summaries_batch:
+                        output = io.StringIO()
+                        with redirect_stdout(output):
+                            exit_code = cli.main(["run-batch", "--date", "2026-06-10", "--only", "summaries"])
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(json.loads(output.getvalue()), {"status": "success"})
         summaries_batch.assert_called_once()
         self.assertEqual(summaries_batch.call_args.kwargs["day"], date(2026, 6, 10))
+        self.assertIs(summaries_batch.call_args.kwargs["summary_provider"], summary_provider)
 
     def test_cli_all_marks_partial_failure_when_chunks_succeed_and_summaries_fail(self):
         chunks_result = mock.Mock()
@@ -310,12 +313,13 @@ class BatchSummariesTest(unittest.TestCase):
             summaries_result.staging_dir = str(Path(tmp) / "2026-06-10" / summaries_result.batch_id)
             with mock.patch.dict("os.environ", {"DATABASE_URL": "postgresql://local/test"}):
                 with mock.patch("src.cli._embedding_provider_from_env", return_value=mock.Mock()):
-                    with mock.patch("src.cli.run_chunks_batch", return_value=chunks_result):
-                        with mock.patch("src.cli.run_summaries_batch", return_value=summaries_result):
-                            output = io.StringIO()
-                            stderr = io.StringIO()
-                            with redirect_stdout(output), redirect_stderr(stderr):
-                                exit_code = cli.main(["run-batch", "--date", "2026-06-10", "--only", "all"])
+                    with mock.patch("src.cli._summary_provider_from_env", return_value=mock.Mock()):
+                        with mock.patch("src.cli.run_chunks_batch", return_value=chunks_result):
+                            with mock.patch("src.cli.run_summaries_batch", return_value=summaries_result):
+                                output = io.StringIO()
+                                stderr = io.StringIO()
+                                with redirect_stdout(output), redirect_stderr(stderr):
+                                    exit_code = cli.main(["run-batch", "--date", "2026-06-10", "--only", "all"])
 
             payload = json.loads(output.getvalue())
             all_manifest = json.loads(Path(payload["manifest_path"]).read_text(encoding="utf-8"))
@@ -339,16 +343,18 @@ class BatchSummariesTest(unittest.TestCase):
         summaries_result.batch_id = "summary-2026-06-10-r1"
         summaries_result.staging_dir = ""
         summaries_result.to_json.return_value = json.dumps({"status": "success", "batch_id": summaries_result.batch_id})
+        summary_provider = mock.Mock()
 
         with tempfile.TemporaryDirectory() as tmp:
             summaries_result.staging_dir = str(Path(tmp) / "2026-06-10" / summaries_result.batch_id)
             with mock.patch.dict("os.environ", {"DATABASE_URL": "postgresql://local/test"}):
                 with mock.patch("src.cli._embedding_provider_from_env", return_value=mock.Mock()):
-                    with mock.patch("src.cli.run_chunks_batch", return_value=chunks_result):
-                        with mock.patch("src.cli.run_summaries_batch", return_value=summaries_result):
-                            output = io.StringIO()
-                            with redirect_stdout(output):
-                                exit_code = cli.main(["run-batch", "--date", "2026-06-10", "--only", "all"])
+                    with mock.patch("src.cli._summary_provider_from_env", return_value=summary_provider):
+                        with mock.patch("src.cli.run_chunks_batch", return_value=chunks_result):
+                            with mock.patch("src.cli.run_summaries_batch", return_value=summaries_result) as summaries_batch:
+                                output = io.StringIO()
+                                with redirect_stdout(output):
+                                    exit_code = cli.main(["run-batch", "--date", "2026-06-10", "--only", "all"])
 
             payload = json.loads(output.getvalue())
             all_manifest = json.loads(Path(payload["manifest_path"]).read_text(encoding="utf-8"))
@@ -356,6 +362,28 @@ class BatchSummariesTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload["status"], "success")
         self.assertEqual(all_manifest["step_status"], {"chunks": "success", "summaries": "success"})
+        self.assertIs(summaries_batch.call_args.kwargs["summary_provider"], summary_provider)
+
+    def test_openai_summary_provider_gate_uses_approved_env(self):
+        with mock.patch.dict(
+            "os.environ",
+            {
+                "BATCH_SUMMARY_PROVIDER": "openai",
+                "OPENAI_API_KEY": "sk-test",
+                "SUMMARY_MODEL": "gpt-5.4-nano",
+                "BATCH_PROVIDER_TIMEOUT_SECONDS": "12.5",
+            },
+            clear=True,
+        ):
+            with mock.patch("src.cli.OpenAISummaryClient") as client:
+                provider = cli._summary_provider_from_env()
+
+        self.assertIs(provider, client.return_value)
+        client.assert_called_once_with(
+            api_key="sk-test",
+            model="gpt-5.4-nano",
+            timeout_seconds=12.5,
+        )
 
 
 if __name__ == "__main__":

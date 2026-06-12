@@ -82,7 +82,28 @@ class OpenAIEmbeddingClient:
         self.api_key = api_key
 
     def embed_query(self, query: str, *, model: str, timeout_seconds: float) -> list[float]:
-        payload = {"model": model, "input": query}
+        embeddings = OpenAIEmbeddingBatchClient(
+            api_key=self.api_key,
+            model=model,
+            timeout_seconds=timeout_seconds,
+        ).embed([query])
+        return embeddings[0]
+
+
+class OpenAIEmbeddingBatchClient:
+    def __init__(self, *, api_key: str, model: str, timeout_seconds: float) -> None:
+        if not api_key:
+            raise RuntimeError("OPENAI_API_KEY is required for batch embedding calls")
+        if not model:
+            raise RuntimeError("EMBEDDING_MODEL is required for batch embedding calls")
+        self.api_key = api_key
+        self.model = model
+        self.timeout_seconds = timeout_seconds
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        payload = {"model": self.model, "input": texts}
         request = urllib.request.Request(
             "https://api.openai.com/v1/embeddings",
             data=json.dumps(payload).encode("utf-8"),
@@ -93,13 +114,37 @@ class OpenAIEmbeddingClient:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
                 body = response.read().decode("utf-8")
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")[:300]
             raise RuntimeError(f"OpenAI Embeddings API failed: {exc.code} {detail}") from exc
         parsed = json.loads(body)
-        return list(parsed["data"][0]["embedding"])
+        data = sorted(parsed["data"], key=lambda item: item["index"])
+        embeddings = [list(item["embedding"]) for item in data]
+        if len(embeddings) != len(texts):
+            raise RuntimeError("OpenAI Embeddings API returned an unexpected embedding count")
+        return embeddings
+
+
+class OpenAISummaryClient:
+    def __init__(self, *, api_key: str, model: str, timeout_seconds: float) -> None:
+        if not api_key:
+            raise RuntimeError("OPENAI_API_KEY is required for batch summary calls")
+        if not model:
+            raise RuntimeError("SUMMARY_MODEL is required for batch summary calls")
+        self.client = OpenAIResponsesClient(api_key)
+        self.model = model
+        self.timeout_seconds = timeout_seconds
+
+    def summarize(self, text: str, *, max_output_tokens: int) -> str:
+        result = self.client.answer(
+            text,
+            model=self.model,
+            timeout_seconds=self.timeout_seconds,
+            max_output_tokens=max_output_tokens,
+        )
+        return result.text
 
 
 def _extract_output_text(response: dict) -> str:

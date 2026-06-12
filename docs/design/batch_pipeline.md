@@ -199,6 +199,9 @@ summary prompt 約束：
 - `SUMMARY_MODEL=gpt-5.4-nano`；summary LLM model 由環境變數指定，第一版 bounded trial 已批准使用此 model。
 - `EMBEDDING_MODEL=text-embedding-3-small`；與正式表 `vector(1536)` 耦合，第一版不做任意切換。
 - `CHUNK_STRATEGY_VERSION` 與 `SUMMARY_STRATEGY_VERSION` 必須由環境變數提供，缺失時 batch command 應 fail fast。
+- `BATCH_EMBEDDING_PROVIDER=fake|openai`；`fake` 只供本機驗證，`openai` 只供明確授權的 ops trial。
+- `BATCH_SUMMARY_PROVIDER=|none|openai`；空值或 `none` 走 raw-lines fallback，`openai` 只供明確授權的 ops trial。
+- `BATCH_PROVIDER_TIMEOUT_SECONDS=60`；外部 embedding / summary provider 單次 HTTP request timeout。
 - chunk / summary / embedding / staging 參數以 `.env.example` 為設定清單，修改後由下一次 CLI run 生效；不做 DB config 或熱更新。
 
 ## Embedding Pipeline
@@ -256,6 +259,7 @@ dry-run 只要計算成功就 exit 0，即使 expected artifacts 為 0；設定�
 
 - 允許呼叫 OpenAI embedding API，model 固定 `text-embedding-3-small`。
 - 允許 summary LLM calls，model 固定 `gpt-5.4-nano`；summary LLM 失敗時仍依既有規則 fallback 到 raw lines。
+- Real-run 必須明確設定 `BATCH_EMBEDDING_PROVIDER=openai` 與 `BATCH_SUMMARY_PROVIDER=openai`；dry-run 仍不呼叫外部 API。
 - runtime answer / fallback / router LLM calls 已批准 model IDs，但 runtime RAG bot 仍需等對應 implementation issue 實作後才可啟用。
 - 不呼叫 OpenAI Batch API。
 - 不呼叫 Discord API、不中斷或補抓 Discord 歷史、不跑 migration、不啟動 runtime bot。

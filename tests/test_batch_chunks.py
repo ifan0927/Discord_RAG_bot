@@ -325,6 +325,27 @@ class BatchChunksTest(unittest.TestCase):
         provider = chunks_batch.call_args.kwargs["embedding_provider"]
         self.assertEqual(len(provider.embed(["same text"])[0]), 1536)
 
+    def test_openai_embedding_provider_gate_uses_approved_env(self):
+        with mock.patch.dict(
+            "os.environ",
+            {
+                "BATCH_EMBEDDING_PROVIDER": "openai",
+                "OPENAI_API_KEY": "sk-test",
+                "EMBEDDING_MODEL": "text-embedding-3-small",
+                "BATCH_PROVIDER_TIMEOUT_SECONDS": "12.5",
+            },
+            clear=True,
+        ):
+            with mock.patch("src.cli.OpenAIEmbeddingBatchClient") as client:
+                provider = cli._embedding_provider_from_env()
+
+        self.assertIs(provider, client.return_value)
+        client.assert_called_once_with(
+            api_key="sk-test",
+            model="text-embedding-3-small",
+            timeout_seconds=12.5,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

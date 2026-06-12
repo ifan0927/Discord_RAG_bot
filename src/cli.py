@@ -13,9 +13,10 @@ from dotenv import load_dotenv
 from src.batch_check import check_batch_day
 from src.batch_chunks import DeterministicFakeEmbeddingProvider, EmbeddingProvider, run_chunks_batch
 from src.batch_dry_run import parse_day, run_batch_dry_run
-from src.batch_summaries import run_summaries_batch
+from src.batch_summaries import SummaryProvider, run_summaries_batch
 from src.jsonl_import import import_jsonl_directory
 from src.migration import apply_schema, check_schema, database_url_from_env
+from src.openai_runtime import OpenAIEmbeddingBatchClient, OpenAISummaryClient
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -78,6 +79,7 @@ def main(argv: list[str] | None = None) -> int:
                 day=day,
                 only=args.only,
                 embedding_provider=_embedding_provider_from_env(),
+                summary_provider=_summary_provider_from_env(),
             )
             print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
             return 0 if payload["status"] in ("success", "success_empty") else 1
@@ -99,6 +101,7 @@ def main(argv: list[str] | None = None) -> int:
                 only=args.only,
                 resume=args.resume,
                 embedding_provider=_embedding_provider_from_env(),
+                summary_provider=_summary_provider_from_env(),
             )
             print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
             return 1 if payload["failed_days"] else 0
@@ -153,13 +156,56 @@ def _import_target_ids_from_env() -> tuple[int, int]:
 
 def _embedding_provider_from_env() -> EmbeddingProvider:
     load_dotenv()
-    provider = os.getenv("BATCH_EMBEDDING_PROVIDER")
+    provider = os.getenv("BATCH_EMBEDDING_PROVIDER", "").strip().lower()
     if provider == "fake":
         return DeterministicFakeEmbeddingProvider()
+    if provider == "openai":
+        return OpenAIEmbeddingBatchClient(
+            api_key=_required_env("OPENAI_API_KEY"),
+            model=_required_env("EMBEDDING_MODEL"),
+            timeout_seconds=_env_float("BATCH_PROVIDER_TIMEOUT_SECONDS", 60.0),
+        )
     raise RuntimeError(
         "Missing supported BATCH_EMBEDDING_PROVIDER. Set BATCH_EMBEDDING_PROVIDER=fake for local "
-        "validation, or run an ops issue that explicitly authorizes real provider calls."
+        "validation, or BATCH_EMBEDDING_PROVIDER=openai for an explicitly authorized ops trial."
     )
+
+
+def _summary_provider_from_env() -> SummaryProvider | None:
+    load_dotenv()
+    provider = os.getenv("BATCH_SUMMARY_PROVIDER", "").strip().lower()
+    if provider in ("", "none"):
+        return None
+    if provider == "openai":
+        return OpenAISummaryClient(
+            api_key=_required_env("OPENAI_API_KEY"),
+            model=_required_env("SUMMARY_MODEL"),
+            timeout_seconds=_env_float("BATCH_PROVIDER_TIMEOUT_SECONDS", 60.0),
+        )
+    raise RuntimeError(
+        "Unsupported BATCH_SUMMARY_PROVIDER. Leave it empty for raw-lines fallback, "
+        "or set BATCH_SUMMARY_PROVIDER=openai for an explicitly authorized ops trial."
+    )
+
+
+def _required_env(name: str) -> str:
+    value = os.getenv(name)
+    if not value:
+        raise RuntimeError(f"Missing required environment variable: {name}")
+    return value
+
+
+def _env_float(name: str, default: float) -> float:
+    value = os.getenv(name)
+    if not value:
+        return default
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be a number") from exc
+    if parsed <= 0:
+        raise RuntimeError(f"{name} must be greater than 0")
+    return parsed
 
 
 def _run_backfill(
@@ -170,6 +216,7 @@ def _run_backfill(
     only: str,
     resume: bool,
     embedding_provider: EmbeddingProvider,
+    summary_provider: SummaryProvider | None,
 ) -> dict[str, Any]:
     if end_date < start_date:
         raise RuntimeError("end date must be on or after start date")
@@ -198,6 +245,7 @@ def _run_backfill(
                 day=day,
                 only=only,
                 embedding_provider=embedding_provider,
+                summary_provider=summary_provider,
             )
             results.append(payload)
             if payload["status"] not in ("success", "success_empty"):
@@ -225,6 +273,7 @@ def _run_real_batch_day(
     day: date,
     only: str,
     embedding_provider: EmbeddingProvider,
+    summary_provider: SummaryProvider | None,
 ) -> dict[str, Any]:
     if only == "chunks":
         result = run_chunks_batch(
@@ -238,6 +287,7 @@ def _run_real_batch_day(
             database_url=database_url,
             day=day,
             embedding_provider=embedding_provider,
+            summary_provider=summary_provider,
         )
         return json.loads(result.to_json())
 
@@ -252,6 +302,7 @@ def _run_real_batch_day(
         database_url=database_url,
         day=day,
         embedding_provider=embedding_provider,
+        summary_provider=summary_provider,
     )
     if summaries_result.status not in ("success", "success_empty"):
         manifest_path = _write_all_batch_manifest(
