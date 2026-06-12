@@ -2,7 +2,7 @@
 
 這份文件是目前的產品收斂紀錄。它整理第一版產品方向與邊界，避免後續討論回到已排除範圍。
 
-目前程式碼只保留最小 Discord bot skeleton；schema、runtime request flow、batch pipeline 與 bounded trial scope 已另行收斂，但尚未實作。本文只保存產品邊界、已排除範圍與文件索引；技術細節以 `ddl.md`、`runtime_flow.md`、`batch_pipeline.md` 與 `rag_schema.sql` 為準。
+目前程式碼已從最小 Discord bot skeleton 推進到 runtime mention orchestration 與部分 batch slices；schema、runtime request flow、batch pipeline 與 bounded trial scope 已另行收斂。本文只保存產品邊界、已排除範圍與文件索引；技術細節以 `ddl.md`、`runtime_flow.md`、`batch_pipeline.md` 與 `rag_schema.sql` 為準。
 
 ## 1. 產品定位
 
@@ -21,7 +21,7 @@
 - 不支援 DM。
 - 第一版 runtime 忽略 Discord threads；schema 內保留 `sessions.thread_id` 只是資料結構預留，不代表第一版產品支援 thread 互動。
 - 不做主動插話、主動摘要、每日報告或定時報告。
-- 目前 skeleton 不保留 slash command；若未來要恢復 `/usage` 或其他管理入口，需重新收斂後再落地。
+- 目前 runtime 不保留 slash command；若未來要恢復 `/usage` 或其他管理入口，需重新收斂後再落地。
 
 ## 3. 回覆邊界
 
@@ -71,9 +71,11 @@
 
 ## 7. 目前程式碼邊界
 
-- 只保留最小 Discord bot skeleton。
-- 只保留 bot 啟動、guild/channel 限定與 mention 占位回覆。
-- 尚未實作資料庫、schema migration、索引、session、模型 provider、prompt 檔、用量彙整或 slash command。
+- 已保留最小 Discord bot 啟動與 guild/channel 限定。
+- `@bot` mention runtime 已接上 raw upsert、session lookup/update、summary-first retrieval、prompt assembly 與 answer/router/fallback provider 邊界。
+- 已加入 repo 內固定 answer/router prompt 檔。
+- 已實作 schema migration command、JSONL import、batch dry-run、chunks 與 summaries artifact slices。
+- 尚未做真 Discord / OpenAI ops validation、用量彙整或 slash command。
 - Docker 目前只保留 bot service，不保留資料庫 service；下一個 implementation slice 可以加入 PostgreSQL + pgvector service，但 bot startup 與 Docker entrypoint 仍不得自動執行 migration。
 - 舊喝水小遊戲功能、文件、資料表與資料都不保留。
 
@@ -101,8 +103,8 @@
 
 ## 10. 實作前合約狀態
 
-- answer / fallback / router / summary model 名稱：已批准為 `gpt-5.4-mini` / `gpt-5.4-nano` / `gpt-5.4-nano` / `gpt-5.4-nano`；bounded trial 第一輪 real batch 允許 `text-embedding-3-small` embedding 與 `gpt-5.4-nano` summary LLM，runtime LLM calls 需等 runtime RAG implementation issue 實作後才啟用。
-- answer system prompt 與 router prompt：合約已收斂於 `runtime_flow.md`；實際 prompt 檔尚未實作。
+- answer / fallback / router / summary model 名稱：已批准為 `gpt-5.4-mini` / `gpt-5.4-nano` / `gpt-5.4-nano` / `gpt-5.4-nano`；bounded trial 第一輪 real batch 允許 `text-embedding-3-small` embedding 與 `gpt-5.4-nano` summary LLM，runtime LLM calls 已接上 provider 邊界，真外部驗證需另走 ops / validation。
+- answer system prompt 與 router prompt：合約已收斂於 `runtime_flow.md`；實際 prompt 檔已加入 repo。
 - JSONL import 與 Discord runtime 共用的 normalization / eligibility 規則：已收斂於 `runtime_flow.md`。
 - migration command 與 CLI entrypoint 邊界：已收斂於 `batch_pipeline.md`。
 - bounded trial selection rule：raw DB 內最新 30 個完整 Asia/Taipei 日，不足 30 日則使用所有可用完整日；必須先通過 dry-run 與 cost gate。
