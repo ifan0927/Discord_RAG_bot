@@ -14,7 +14,7 @@ RAG schema 設計見 [docs/design/ddl.md](docs/design/ddl.md) 與 [docs/design/r
 - 已收斂：產品邊界、schema、runtime flow、batch/backfill flow、bounded trial selection rule、trial model IDs、prompt 合約、normalization / eligibility、migration / CLI / Compose 邊界、structured logs。
 - 試跑 gate：最新 30 個完整 Asia/Taipei 日；第一輪 real batch 允許 embedding API 與 summary LLM；必須先通過 dry-run 與成本上限。
 - 已批准模型：answer 使用 `gpt-5.4-mini`；fallback、router、summary 使用 `gpt-5.4-nano`；embedding 使用 `text-embedding-3-small`。
-- 尚待實作：backfill/check/cleanup commands，以及真 Discord / OpenAI ops validation。
+- 尚待實作：cleanup command，以及真 Discord / OpenAI ops validation。
 
 ## 本機啟動
 
@@ -39,6 +39,16 @@ docker compose up -d db
 
 ```bash
 ./.venv/bin/python -m src.cli import-jsonl --input-dir exports/channel_123 --bot-user-id 999
+```
+
+## Bounded trial
+
+Real trial 必須先跑 dry-run 並通過成本 gate。只有明確授權的 ops / validation trial 才可將 batch provider 設為 OpenAI。
+
+```bash
+./.venv/bin/python -m src.cli backfill --start YYYY-MM-DD --end YYYY-MM-DD --only all --dry-run
+BATCH_EMBEDDING_PROVIDER=openai BATCH_SUMMARY_PROVIDER=openai ./.venv/bin/python -m src.cli backfill --start YYYY-MM-DD --end YYYY-MM-DD --only all
+./.venv/bin/python -m src.cli check-batch --date YYYY-MM-DD --json
 ```
 
 ## 驗證
