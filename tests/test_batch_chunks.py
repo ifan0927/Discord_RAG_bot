@@ -5,7 +5,7 @@ import io
 import json
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -169,6 +169,59 @@ class BatchChunksTest(unittest.TestCase):
         executed_sql = "\n".join(execution[0] for execution in fake_conn.executions)
         self.assertNotIn("DELETE FROM conversation_chunks", executed_sql)
         self.assertNotIn("INSERT INTO conversation_chunks", executed_sql)
+
+    def test_chunk_count_mismatch_fails_validation_without_commit(self):
+        fake_conn = FakeConnection(raw_rows=[raw_row(index, index) for index in range(1, 6)])
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch("src.batch_chunks._expected_chunk_count", return_value=2):
+                result = run_chunks_batch(
+                    database_url="postgresql://local/test",
+                    day=date(2026, 6, 10),
+                    embedding_provider=FakeEmbeddingProvider(),
+                    settings=settings(Path(tmp)),
+                    schema_checker=lambda database_url: FakeSchema(ok=True),
+                    connect=lambda database_url: fake_conn,
+                )
+            manifest = json.loads(Path(result.manifest_path).read_text(encoding="utf-8"))
+
+        self.assertEqual(result.status, "failed")
+        self.assertEqual(manifest["expected_chunks"], 2)
+        self.assertEqual(manifest["actual_chunks"], 1)
+        self.assertIn("chunk count mismatch: expected 2, actual 1", manifest["errors"])
+        executed_sql = "\n".join(execution[0] for execution in fake_conn.executions)
+        self.assertNotIn("DELETE FROM conversation_chunks", executed_sql)
+        self.assertNotIn("INSERT INTO conversation_chunks", executed_sql)
+
+    def test_chunks_batch_writes_structured_json_logs_to_stderr(self):
+        fake_conn = FakeConnection(raw_rows=[raw_row(index, index) for index in range(1, 6)])
+        stderr = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stderr(stderr):
+                result = run_chunks_batch(
+                    database_url="postgresql://local/test",
+                    day=date(2026, 6, 10),
+                    embedding_provider=FakeEmbeddingProvider(),
+                    settings=settings(Path(tmp)),
+                    schema_checker=lambda database_url: FakeSchema(ok=True),
+                    connect=lambda database_url: fake_conn,
+                )
+
+        events = [json.loads(line) for line in stderr.getvalue().splitlines()]
+        self.assertEqual(result.status, "success")
+        self.assertEqual(
+            [event["event"] for event in events],
+            [
+                "batch_started",
+                "batch_step_started",
+                "artifact_committed",
+                "batch_step_finished",
+                "batch_finished",
+            ],
+        )
+        self.assertEqual(events[-1]["status"], "success")
+        self.assertEqual(events[-1]["batch_id"], result.batch_id)
+        self.assertEqual(events[-1]["expected_count"], 1)
+        self.assertEqual(events[-1]["actual_count"], 1)
 
     def test_failed_rerun_gets_new_batch_id_from_existing_staging(self):
         rows = [raw_row(index, index) for index in range(1, 6)]

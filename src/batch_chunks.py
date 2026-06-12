@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import sys
 from typing import Any, Protocol
 from zoneinfo import ZoneInfo
 
@@ -143,14 +144,36 @@ def run_chunks_batch(
         )
 
     staging_dir = _staging_dir(settings.batch_staging_dir, day, batch_id)
+    expected_chunks = _expected_chunk_count(messages, settings)
+    _log_batch_event(
+        "batch_started",
+        day=day,
+        batch_id=batch_id,
+        settings=settings,
+        status="started",
+        input_count=len(messages),
+        expected_count=expected_chunks,
+        started_at=started_at,
+    )
+    _log_batch_event(
+        "batch_step_started",
+        day=day,
+        batch_id=batch_id,
+        settings=settings,
+        status="started",
+        input_count=len(messages),
+        expected_count=expected_chunks,
+        started_at=started_at,
+    )
     staged = _stage_chunks(day, messages, batch_id, settings, embedding_provider)
-    validation_errors = _validate_chunks(day, staged.chunks, settings)
+    validation_errors = _validate_chunks(day, staged.chunks, expected_chunks, settings)
     manifest = _write_staging(
         staging_dir,
         day,
         batch_id,
         messages,
         staged,
+        expected_chunks,
         validation_errors,
         settings,
         started_at,
@@ -158,6 +181,45 @@ def run_chunks_batch(
     )
 
     if validation_errors:
+        _log_batch_event(
+            "artifact_validation_failed",
+            day=day,
+            batch_id=batch_id,
+            settings=settings,
+            status="failed",
+            input_count=len(messages),
+            output_count=len(staged.chunks),
+            expected_count=expected_chunks,
+            actual_count=len(staged.chunks),
+            error_count=len(validation_errors),
+            started_at=started_at,
+        )
+        _log_batch_event(
+            "batch_step_failed",
+            day=day,
+            batch_id=batch_id,
+            settings=settings,
+            status="failed",
+            input_count=len(messages),
+            output_count=len(staged.chunks),
+            expected_count=expected_chunks,
+            actual_count=len(staged.chunks),
+            error_count=len(validation_errors),
+            started_at=started_at,
+        )
+        _log_batch_event(
+            "batch_finished",
+            day=day,
+            batch_id=batch_id,
+            settings=settings,
+            status="failed",
+            input_count=len(messages),
+            output_count=len(staged.chunks),
+            expected_count=expected_chunks,
+            actual_count=len(staged.chunks),
+            error_count=len(validation_errors),
+            started_at=started_at,
+        )
         return ChunkBatchResult(
             day=day.isoformat(),
             status="failed",
@@ -172,6 +234,42 @@ def run_chunks_batch(
         committed = _commit_chunks(conn, staged.chunks, settings.chunk_strategy_version, start_at, end_at)
 
     final_status = "success_empty" if len(staged.chunks) == 0 else "success"
+    _log_batch_event(
+        "artifact_committed",
+        day=day,
+        batch_id=batch_id,
+        settings=settings,
+        status=final_status,
+        input_count=len(messages),
+        output_count=committed,
+        expected_count=expected_chunks,
+        actual_count=len(staged.chunks),
+        started_at=started_at,
+    )
+    _log_batch_event(
+        "batch_step_finished",
+        day=day,
+        batch_id=batch_id,
+        settings=settings,
+        status=final_status,
+        input_count=len(messages),
+        output_count=committed,
+        expected_count=expected_chunks,
+        actual_count=len(staged.chunks),
+        started_at=started_at,
+    )
+    _log_batch_event(
+        "batch_finished",
+        day=day,
+        batch_id=batch_id,
+        settings=settings,
+        status=final_status,
+        input_count=len(messages),
+        output_count=committed,
+        expected_count=expected_chunks,
+        actual_count=len(staged.chunks),
+        started_at=started_at,
+    )
     _write_manifest(
         staging_dir / "manifest.json",
         {**manifest, "status": final_status, "step_status": {"chunks": final_status}, "finished_at": _now_iso()},
@@ -309,6 +407,10 @@ def _chunk_windows(
     return windows
 
 
+def _expected_chunk_count(messages: list[RawMessage], settings: ChunkBatchSettings) -> int:
+    return len(_chunk_windows(messages, settings))
+
+
 def _chunk_text(messages: list[RawMessage], max_chars: int) -> tuple[str, bool]:
     lines = [
         (
@@ -325,9 +427,11 @@ def _chunk_text(messages: list[RawMessage], max_chars: int) -> tuple[str, bool]:
 
 
 def _validate_chunks(
-    day: date, chunks: list[StagedChunk], settings: ChunkBatchSettings
+    day: date, chunks: list[StagedChunk], expected_count: int, settings: ChunkBatchSettings
 ) -> list[str]:
     errors = []
+    if len(chunks) != expected_count:
+        errors.append(f"chunk count mismatch: expected {expected_count}, actual {len(chunks)}")
     keys = [chunk.chunk_key for chunk in chunks]
     if len(keys) != len(set(keys)):
         errors.append("chunk_key values must be unique")
@@ -352,6 +456,7 @@ def _write_staging(
     batch_id: str,
     messages: list[RawMessage],
     staged: StagedChunks,
+    expected_chunks: int,
     errors: list[str],
     settings: ChunkBatchSettings,
     started_at: datetime,
@@ -375,8 +480,8 @@ def _write_staging(
         "error_counts": {"chunks": len(errors)},
         "errors": errors,
         "estimated_cost": "unknown",
-        "expected_artifact_counts": {"chunks": len(staged.chunks)},
-        "expected_chunks": len(staged.chunks),
+        "expected_artifact_counts": {"chunks": expected_chunks},
+        "expected_chunks": expected_chunks,
         "failed_days": [day.isoformat()] if errors else [],
         "fallback_counts": {"chunks": 0},
         "files": {
@@ -515,6 +620,45 @@ def _write_manifest(path: Path, manifest: dict[str, Any]) -> None:
         json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+
+
+def _log_batch_event(
+    event_name: str,
+    *,
+    day: date,
+    batch_id: str,
+    settings: ChunkBatchSettings,
+    status: str,
+    input_count: int,
+    expected_count: int,
+    started_at: datetime,
+    output_count: int = 0,
+    actual_count: int = 0,
+    error_count: int = 0,
+) -> None:
+    finished_at = datetime.now(timezone.utc)
+    event = {
+        "event": event_name,
+        "run_id": batch_id,
+        "batch_id": batch_id,
+        "date": day.isoformat(),
+        "only": "chunks",
+        "strategy_version": settings.chunk_strategy_version,
+        "status": status,
+        "duration_ms": int((finished_at - started_at).total_seconds() * 1000),
+        "input_count": input_count,
+        "output_count": output_count,
+        "expected_count": expected_count,
+        "actual_count": actual_count,
+        "error_count": error_count,
+        "retry_count": 0,
+        "token_input": "unknown",
+        "token_output": 0,
+        "estimated_cost": "unknown",
+        "started_at": started_at.isoformat(),
+        "finished_at": finished_at.isoformat(),
+    }
+    print(json.dumps(event, ensure_ascii=False, sort_keys=True), file=sys.stderr)
 
 
 def _sha256(path: Path) -> str:
