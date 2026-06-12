@@ -256,9 +256,27 @@ class BatchDryRunTest(unittest.TestCase):
         dry_run.assert_called_once()
         self.assertEqual(dry_run.call_args.kwargs["only"], "summaries")
 
-    def test_cli_backfill_rejects_non_dry_run(self):
-        with self.assertRaisesRegex(RuntimeError, "only --dry-run"):
-            cli.main(["backfill", "--start", "2026-06-10", "--end", "2026-06-11", "--only", "all"])
+    def test_cli_backfill_non_dry_run_uses_real_backfill(self):
+        fake_payload = {
+            "command": "backfill",
+            "status": "success",
+            "failed_days": [],
+        }
+
+        with mock.patch.dict(
+            "os.environ",
+            {"DATABASE_URL": "postgresql://local/test", "BATCH_EMBEDDING_PROVIDER": "fake"},
+        ):
+            with mock.patch("src.cli._run_backfill", return_value=fake_payload) as backfill:
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    exit_code = cli.main(
+                        ["backfill", "--start", "2026-06-10", "--end", "2026-06-11", "--only", "all"]
+                    )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(json.loads(output.getvalue()), fake_payload)
+        backfill.assert_called_once()
 
 
 if __name__ == "__main__":
