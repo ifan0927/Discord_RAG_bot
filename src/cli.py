@@ -7,6 +7,7 @@ import sys
 
 from dotenv import load_dotenv
 
+from src.batch_chunks import DeterministicFakeEmbeddingProvider, EmbeddingProvider, run_chunks_batch
 from src.batch_dry_run import parse_day, run_batch_dry_run
 from src.jsonl_import import import_jsonl_directory
 from src.migration import apply_schema, check_schema, database_url_from_env
@@ -60,9 +61,17 @@ def main(argv: list[str] | None = None) -> int:
         print(result.summary())
         return 0
     if args.command == "run-batch":
-        if not args.dry_run:
-            raise RuntimeError("run-batch currently supports only --dry-run")
         day = parse_day(args.date)
+        if not args.dry_run and args.only == "chunks":
+            result = run_chunks_batch(
+                database_url=database_url_from_env(),
+                day=day,
+                embedding_provider=_embedding_provider_from_env(),
+            )
+            print(result.to_json())
+            return 0 if result.status in ("success", "success_empty") else 1
+        if not args.dry_run:
+            raise RuntimeError("run-batch currently supports non-dry-run only for --only chunks")
         result = run_batch_dry_run(
             database_url=database_url_from_env(),
             start_date=day,
@@ -98,6 +107,17 @@ def _import_target_ids_from_env() -> tuple[int, int]:
     if not channel_id:
         raise RuntimeError("Missing required environment variable: CHANNEL_ID")
     return int(guild_id), int(channel_id)
+
+
+def _embedding_provider_from_env() -> EmbeddingProvider:
+    load_dotenv()
+    provider = os.getenv("BATCH_EMBEDDING_PROVIDER")
+    if provider == "fake":
+        return DeterministicFakeEmbeddingProvider()
+    raise RuntimeError(
+        "Missing supported BATCH_EMBEDDING_PROVIDER. Set BATCH_EMBEDDING_PROVIDER=fake for local "
+        "validation, or run an ops issue that explicitly authorizes real provider calls."
+    )
 
 
 if __name__ == "__main__":
