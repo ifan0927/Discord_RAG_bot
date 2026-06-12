@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import argparse
+from datetime import date, datetime, timezone
+import json
 import os
 from pathlib import Path
 import sys
+from typing import Any
 
 from dotenv import load_dotenv
 
 from src.batch_chunks import DeterministicFakeEmbeddingProvider, EmbeddingProvider, run_chunks_batch
 from src.batch_dry_run import parse_day, run_batch_dry_run
+from src.batch_summaries import run_summaries_batch
 from src.jsonl_import import import_jsonl_directory
 from src.migration import apply_schema, check_schema, database_url_from_env
 
@@ -62,16 +66,79 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "run-batch":
         day = parse_day(args.date)
-        if not args.dry_run and args.only == "chunks":
-            result = run_chunks_batch(
-                database_url=database_url_from_env(),
-                day=day,
-                embedding_provider=_embedding_provider_from_env(),
-            )
-            print(result.to_json())
-            return 0 if result.status in ("success", "success_empty") else 1
         if not args.dry_run:
-            raise RuntimeError("run-batch currently supports non-dry-run only for --only chunks")
+            database_url = database_url_from_env()
+            embedding_provider = _embedding_provider_from_env()
+            if args.only == "chunks":
+                result = run_chunks_batch(
+                    database_url=database_url,
+                    day=day,
+                    embedding_provider=embedding_provider,
+                )
+                print(result.to_json())
+                return 0 if result.status in ("success", "success_empty") else 1
+            if args.only == "summaries":
+                result = run_summaries_batch(
+                    database_url=database_url,
+                    day=day,
+                    embedding_provider=embedding_provider,
+                )
+                print(result.to_json())
+                return 0 if result.status in ("success", "success_empty") else 1
+            chunks_result = run_chunks_batch(
+                database_url=database_url,
+                day=day,
+                embedding_provider=embedding_provider,
+            )
+            if chunks_result.status not in ("success", "success_empty"):
+                print(chunks_result.to_json())
+                return 1
+            summaries_result = run_summaries_batch(
+                database_url=database_url,
+                day=day,
+                embedding_provider=embedding_provider,
+            )
+            if summaries_result.status not in ("success", "success_empty"):
+                manifest_path = _write_all_batch_manifest(
+                    day,
+                    "partial_failed",
+                    chunks_result,
+                    summaries_result,
+                )
+                _log_all_batch_event(day, "partial_failed", chunks_result, summaries_result, "batch_partial_failed")
+                _log_all_batch_event(day, "partial_failed", chunks_result, summaries_result)
+                print(
+                    json.dumps(
+                        {
+                            "day": day.isoformat(),
+                            "status": "partial_failed",
+                            "manifest_path": str(manifest_path),
+                            "chunks": json.loads(chunks_result.to_json()),
+                            "summaries": json.loads(summaries_result.to_json()),
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                        sort_keys=True,
+                    )
+                )
+                return 1
+            manifest_path = _write_all_batch_manifest(day, "success", chunks_result, summaries_result)
+            _log_all_batch_event(day, "success", chunks_result, summaries_result)
+            print(
+                json.dumps(
+                    {
+                        "day": day.isoformat(),
+                        "status": "success",
+                        "manifest_path": str(manifest_path),
+                        "chunks": json.loads(chunks_result.to_json()),
+                        "summaries": json.loads(summaries_result.to_json()),
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+            return 0
         result = run_batch_dry_run(
             database_url=database_url_from_env(),
             start_date=day,
@@ -118,6 +185,62 @@ def _embedding_provider_from_env() -> EmbeddingProvider:
         "Missing supported BATCH_EMBEDDING_PROVIDER. Set BATCH_EMBEDDING_PROVIDER=fake for local "
         "validation, or run an ops issue that explicitly authorizes real provider calls."
     )
+
+
+def _write_all_batch_manifest(
+    day: date,
+    status: str,
+    chunks_result: Any,
+    summaries_result: Any,
+) -> Path:
+    staging_dir = Path(summaries_result.staging_dir)
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = staging_dir / "all_manifest.json"
+    manifest = {
+        "batch_id": f"all-{day.isoformat()}",
+        "chunk_batch_id": chunks_result.batch_id,
+        "summary_batch_id": summaries_result.batch_id,
+        "day": day.isoformat(),
+        "finished_at": datetime.now(timezone.utc).isoformat(),
+        "only": "all",
+        "status": status,
+        "step_status": {
+            "chunks": chunks_result.status,
+            "summaries": summaries_result.status,
+        },
+        "chunks": json.loads(chunks_result.to_json()),
+        "summaries": json.loads(summaries_result.to_json()),
+    }
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return manifest_path
+
+
+def _log_all_batch_event(
+    day: date,
+    status: str,
+    chunks_result: Any,
+    summaries_result: Any,
+    event_name: str = "batch_finished",
+) -> None:
+    event = {
+        "event": event_name,
+        "run_id": f"all-{day.isoformat()}",
+        "batch_id": f"all-{day.isoformat()}",
+        "date": day.isoformat(),
+        "only": "all",
+        "status": status,
+        "chunk_batch_id": chunks_result.batch_id,
+        "summary_batch_id": summaries_result.batch_id,
+        "step_status": {
+            "chunks": chunks_result.status,
+            "summaries": summaries_result.status,
+        },
+        "finished_at": datetime.now(timezone.utc).isoformat(),
+    }
+    print(json.dumps(event, ensure_ascii=False, sort_keys=True), file=sys.stderr)
 
 
 if __name__ == "__main__":
