@@ -2,16 +2,20 @@ import discord
 from discord.ext import commands
 
 from src.config import Settings
+from src.openai_runtime import OpenAIEmbeddingClient, OpenAIResponsesClient
+from src.runtime import MentionRuntime, RuntimeMessage
+from src.runtime_store import PostgresRuntimeStore
 
 
 class GroupMemoryBot(commands.Bot):
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, runtime: MentionRuntime | None = None) -> None:
         intents = discord.Intents.default()
         intents.guilds = True
         intents.messages = True
         intents.message_content = True
         super().__init__(command_prefix=commands.when_mentioned, intents=intents)
         self.settings = settings
+        self.runtime = runtime
 
     async def on_ready(self) -> None:
         assert self.user is not None
@@ -29,7 +33,47 @@ class GroupMemoryBot(commands.Bot):
 
         await self.process_commands(message)
 
-        if self.user not in message.mentions:
-            return
+        runtime = self.runtime or self._build_runtime()
+        self.runtime = runtime
 
-        await message.channel.send("我收到 mention 了；實際回覆流程尚未接上。")
+        await runtime.handle_message(
+            RuntimeMessage(
+                message_id=int(message.id),
+                created_at=message.created_at,
+                author_id=int(message.author.id),
+                raw_content=message.content,
+                guild_id=int(message.guild.id) if message.guild else None,
+                channel_id=int(message.channel.id),
+                is_dm=message.guild is None,
+                is_thread=isinstance(message.channel, discord.Thread),
+                is_bot_author=message.author.bot,
+                is_bot_mentioned=self.user in message.mentions,
+                bot_user_id=int(self.user.id),
+                has_attachments=bool(message.attachments),
+                has_stickers=bool(message.stickers),
+                has_embeds=bool(message.embeds),
+                is_system_message=message.is_system(),
+            ),
+            message.channel.send,
+        )
+
+    def _build_runtime(self) -> MentionRuntime:
+        store = PostgresRuntimeStore(self.settings.database_url)
+        openai = (
+            OpenAIResponsesClient(self.settings.openai_api_key)
+            if self.settings.openai_api_key
+            else None
+        )
+        embedding = (
+            OpenAIEmbeddingClient(self.settings.openai_api_key)
+            if self.settings.openai_api_key
+            else None
+        )
+        return MentionRuntime(
+            self.settings,
+            store,
+            embedding_client=embedding,
+            answer_client=openai,
+            fallback_client=openai,
+            router_client=openai,
+        )
