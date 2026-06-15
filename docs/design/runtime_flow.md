@@ -13,6 +13,7 @@
 - `conversation_chunks` 與 `hourly_summaries` 由日終 batch 產生。
 - DDL 只能由明確 migration command 執行；bot 啟動與 Docker entrypoint 不自動套 schema。
 - model selection、answer/router prompt、normalization / eligibility 與 runtime structured log 合約由本文件管理；batch、CLI、migration 與 Compose 邊界見 `batch_pipeline.md`。
+- 第一版 runtime 可使用 Discord event payload 內的 member / mentions 資訊解析 display name；若 payload 不足，後續 implementation issue 可加入 runtime-only best-effort guild member lookup，但不得建立 users table、不得做背景 user sync，也不得把 display name 寫入 raw schema。
 
 ## Mermaid Sequence
 
@@ -39,7 +40,7 @@ sequenceDiagram
         alt not @bot mention
             Bot-->>Discord: no action
         else @bot mention
-            Bot->>Bot: request_id + cleaned user_query
+            Bot->>Bot: request_id + cleaned user_query + member identity context
             alt empty user_query
                 Bot-->>Discord: 你叫我了，但還沒給我問題。
             else valid query
@@ -65,7 +66,7 @@ sequenceDiagram
                     Bot->>DB: summary top3 + aligned chunks + global chunks
                 end
 
-                Bot->>Bot: assemble prompt + truncate by budget
+                Bot->>Bot: assemble prompt with member context + truncate by budget
                 Bot->>LLM: answer model (timeout 45s)
                 alt answer failed
                     Bot->>LLM: fallback model (timeout 15s)
@@ -104,6 +105,8 @@ sequenceDiagram
 4. `@bot` mention 訊息一律 `is_rag_eligible=false`；非 mention 真人訊息才依本文件的共用 eligibility 規則判定。
 5. 非 `@bot` mention 真人訊息在 raw upsert 後結束，不進 session、不延長 timeout、不觸發 RAG/LLM。
 6. `@bot` mention 產生 UUID `request_id`，移除 bot mention token 後得到 `user_query`。
+   - runtime 同步建立 metadata-only member identity context：caller id / display name、query-mentioned member ids / display names、unknown member ids。
+   - member identity context 只供 prompt、retrieval intent 與 structured log metadata 使用；不寫入 `raw_messages`、不建立 users table、不寫完整 Discord member payload。
 7. 若 `user_query` 為空，固定回覆「你叫我了，但還沒給我問題。」；不建立或更新 session，不走 RAG/LLM。
 8. 有效 query 進入 typing indicator，讓 Discord 顯示 bot 正在處理。
 9. 使用 Postgres advisory lock 保護短交易的 session lookup/create；lock key 以 `(namespace, channel_id)` 產生。
@@ -115,18 +118,23 @@ sequenceDiagram
 15. router timeout、API 失敗或 JSON 解析失敗時視為 `should_retrieve=false`，沿用既有 retrieval context。
 16. active session 若沒有 retrieved keys 或 `last_rag_query`，跳過 router，直接重新執行 RAG。
 17. RAG 先產生 query embedding；embedding timeout 或失敗時跳過 RAG，走一般 AI。
+   - 若 query 明確包含成員或時間意圖，runtime 可把 `target_author_ids` 與 `target_time_window` 傳入 retrieval；不可為模糊稱呼或無法解析時間硬猜 filter。
 18. retrieval 先查 `hourly_summaries topK=3`，必須 filter `summary_strategy_version`。
 19. 每個 summary hour window 內，用 overlap 條件查 aligned chunks：`chunk.start_at < summary.hour_end AND chunk.end_at >= summary.hour_start`。
 20. 每個 summary hour 取 query embedding cosine distance 最相近 chunks top2，最多 6 個 aligned chunks。
 21. 另外查 global `conversation_chunks topK=2` 作為 summary miss fallback，必須 filter `chunk_strategy_version`。
+   - author-aware retrieval 第一版語意：明確指定 target member 時，先嘗試 author hard filter；若 hard-filtered retrieval 無結果，降級為 same query 的一般 retrieval，並把 `author_filter_empty` 記入 metadata。
+   - time-aware retrieval 第一版語意：明確指定時間窗時，先嘗試 time hard filter；若 time-filtered retrieval 無結果，降級為 same query 的一般 retrieval，並把 `time_filter_empty` 記入 metadata。
+   - author/time intent 存在但只適合弱化排序時，例如「最近」「以前」「某人相關」但無可解析精確範圍，runtime 可做 soft boost；soft boost 不能排除其他結果，也不能讓 answer LLM 宣稱已完整查證。
+   - author/time filter 或 boost 不改變第一版產品邊界：bot 仍不是可驗證歷史查詢工具，filtered retrieval empty 不等於「某人沒說過」或「歷史上沒有發生」。
 22. retrieval 子查詢各自 timeout 3 秒；summary、aligned chunks、global chunks 允許 partial RAG。
 23. query embedding 失敗，或所有 retrieval 子查詢都失敗/無結果，才走 no-context 一般 AI。
 24. retrieval 成功但無結果不是系統錯誤，走一般 AI 並 log `retrieval_empty`。
 25. retrieval 結果以 `chunk_key` 去重；aligned chunks 優先，global fallback 只補不重複 chunk。
 26. active session 沿用 retrieval 時，只在 session 保存 keys，組 prompt 前回 DB 重讀 summary/chunk text。
 27. 沿用 keys 回讀 context 時，缺幾筆跳過；全部缺失則 no-context 一般回答並 log `retrieval_context_missing`。
-28. prompt 組裝順序為：system prompt、retrieved summaries 與 grouped aligned chunks、global fallback chunks、recent session turns、current user query。
-29. prompt 超過 token budget 時，保留 system prompt、current user query 與最近 session turns；先砍 chunks，再砍 summaries，最後才砍舊 session turns。
+28. prompt 組裝順序為：system prompt、caller / mentioned member context、retrieved summaries 與 grouped aligned chunks、global fallback chunks、recent session turns、current user query。
+29. prompt 超過 token budget 時，保留 system prompt、current user query、caller / mentioned member context 與最近 session turns；先砍 chunks，再砍 summaries，最後才砍舊 session turns。
 30. RAG context 最多佔 prompt input token budget 的 40%。
 31. answer LLM 與 router LLM 統一走 OpenAI Responses API；第一版不 streaming。
 32. answer LLM 主模型 timeout 45 秒；失敗或 timeout 後直接 fallback model 一次，timeout 15 秒。
@@ -141,12 +149,67 @@ sequenceDiagram
 41. request logging 使用 structured JSON application log，不新增 DB request log table。
 42. request log 禁止寫入完整 prompt 或完整 retrieved text，只記 metadata、keys、狀態摘要、model、token usage 與 failure flags。
 
+## Member Identity Contract
+
+第一版 member identity 只解決 runtime prompt 與 metadata-aware retrieval 的「當下可讀名稱」問題，不建立長期使用者資料模型。
+
+Display name 來源優先序：
+
+1. Discord `MESSAGE_CREATE` event 的 author `member` / `author` payload。
+2. Discord `mentions` payload 內的 user，以及可用時的 partial member。
+3. 後續 implementation issue 可加入 runtime-only best-effort `Get Guild Member` lookup，用於補足當次 query mention 的 guild nickname / user display name。
+4. 若上述資料都不可用，fallback 為 `member:<discord_user_id>`。
+
+Display name 選擇規則：
+
+1. guild nickname。
+2. user `global_name`。
+3. user `username`。
+4. `member:<discord_user_id>`。
+
+Runtime 使用限制：
+
+- caller identity 以 metadata block 進入 answer prompt，例如 caller id 與 display name；不得覆寫 `current user query`。
+- query-mentioned members 以 metadata block 進入 answer prompt，例如 target member ids 與 display names；不得把未知 id 猜成某個真人。
+- retrieved context 可在 prompt 組裝階段把 `author:<id>` 補充或渲染成 display name，讓 answer LLM 較容易理解對話者；正式 batch artifacts 仍保留 `author_id` 作為穩定來源。
+- runtime-only guild member lookup 失敗、timeout、權限不足或 rate limit 時，不阻塞回答；使用 fallback display name 並記 metadata-only 狀態。
+- 第一版不把 display name、nickname、username、member payload 或 lookup result 寫入 DB，不新增 users table，不做 user sync job，不做多 guild / 多 channel user lifecycle。
+
+## Metadata-Aware Retrieval Contract
+
+Metadata-aware retrieval 只改善候選 context 的相關性，不把 bot 升級為可驗證歷史查詢工具。
+
+Author intent：
+
+- 明確 mention 某位成員或明確使用已解析的 display name 時，可產生 `target_author_ids`。
+- 有 `target_author_ids` 時，第一步可做 author hard filter，只取包含 target author 訊息的 summaries / chunks。
+- hard filter 無結果時，必須降級為一般 retrieval 或 soft boost retrieval；回答不得說「這個人沒有說過」。
+- 若只是不明確代稱，例如「他」「那個人」，且 session context 無法唯一解析，不得產生 hard filter。
+
+Time intent：
+
+- 明確日期、月份、年份或可解析相對時間時，可產生 `target_time_window`。
+- 有 `target_time_window` 時，第一步可做 time hard filter，只取 overlap 該時間窗的 summaries / chunks。
+- time hard filter 無結果時，必須降級為一般 retrieval 或 soft boost retrieval；回答不得說「那段時間沒有發生」。
+- 模糊時間詞若無法穩定解析，例如「之前」「最近」沒有明確窗口時，可做 recency soft boost，但不得排除其他結果。
+
+Combined intent：
+
+- author 與 time 都明確時，先嘗試 author + time hard filter。
+- combined hard filter 無結果時，依序放寬為 author-only 或 time-only，再放寬為一般 retrieval；每次放寬只記 metadata，不在使用者可見回覆中暴露 retrieval 技術詞。
+- 所有 filter / boost 狀態都只進 structured log metadata，不寫完整 prompt、raw content、retrieved text 或 normalized content。
+
 ## Prompt 結構
 
 prompt 組裝的語意是「session 與 current query 為主，RAG context 只做背景強化」。
 
 ```text
 system prompt
+
+目前互動身份:
+- caller: display_name (id)
+- mentioned members:
+  - display_name (id)
 
 群組背景摘要與對應片段:
 - summary 1, relevance order
@@ -185,6 +248,8 @@ prompt 必須包含以下行為合約：
 - 不在使用者可見回覆中暴露 RAG、chunk、embedding、summary、prompt 等技術詞。
 - 不宣稱自己可驗證歷史、統計訊息、查證誰何時說過什麼，除非未來另有明確工具實作。
 - 回覆應以使用者當前問題與最近 session 為主；retrieved context 只作背景補強。
+- 可以使用 caller / mentioned member metadata 理解「我」「他」「@某人」等語境，但不得把未被 context 支援的推測包裝成歷史事實。
+- 若使用者問某成員或某時間的歷史脈絡，而 retrieved context 不足或 filtered retrieval 已放寬，應明確保留不確定性，不得宣稱完整查證。
 - 回答要像 Discord 群組裡直接回話，不像客服或通用 GPT；除非使用者明確要求下一步、選項、改寫、整理或計畫，否則不要在結尾加「如果你需要，我可以...」、「需要的話我也可以...」這類泛用助理式服務尾巴。
 - 風格可以偏繁中口語、短句、自然語助詞與群組聊天節奏；簡單問題避免條列式完整報告，回答到位就停。
 - 可以用 few-shot 正反例約束語氣，但範例不得覆蓋 bot 身份、不得假裝自己是群組真人成員，也不得放寬上述安全與來源邊界。
@@ -363,6 +428,10 @@ Runtime request log fields：
 - `is_degraded`
 - `router_decision`
 - `retrieval_status`
+- `target_author_ids`
+- `target_time_window`
+- `member_identity_status`
+- `retrieval_filter_status`
 - `retrieved_chunk_keys`
 - `retrieved_summary_keys`
 - `answer_model`

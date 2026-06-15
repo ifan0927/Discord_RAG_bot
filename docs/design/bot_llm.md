@@ -29,6 +29,7 @@
 - 可以有群組感、inside joke 與群組語氣，但不能冒犯成員。
 - 不做負面人格判斷、嘲諷式標籤或冒犯性歸類。
 - 可以提到具體成員名稱，但不能把推測包裝成歷史事實。
+- 第一版可用 Discord event payload 或 runtime-only best-effort guild member lookup 解析 caller / mentioned member display name；名稱只用於當次 prompt 與 metadata-aware retrieval，不代表 bot 擁有完整成員檔案。
 - 避免「某人說過」、「某人喜歡」、「某人常常」這類需要驗證的句子。
 - 不在使用者回覆中暴露 RAG、chunk、embedding、summary 等技術詞。
 - 回覆風格與安全邊界未來應可調整；第一版會用 repo 內固定 prompt 檔，不先做 prompt 管理系統或熱更新。
@@ -43,6 +44,7 @@
 - 所有 bot authored message 都忽略，不寫入 raw、不進 RAG。
 - 真人 `@bot` mention 訊息可以寫入 raw archive，但一律 `is_rag_eligible=false`，避免使用者提問本身污染長期群組記憶。
 - 假設群組成員同意收錄；不做 opt-out。
+- 不建立 users table、不保存 username / nickname snapshot、不做 user sync lifecycle；display name 解析是 runtime-only 行為，失敗時 fallback 到穩定 user id 顯示。
 - 需要基本規則式排除干擾訊息，例如其他 bot、空訊息、純 mention、純貼圖/表情；具體 normalization / eligibility 規則見 `runtime_flow.md`。
 - 不做複雜品質分類、人工標註、人工審核、禁用詞清單或 inside joke 清單。
 
@@ -54,6 +56,7 @@
 - 短期上下文使用 `sessions`；長期群組記憶使用 `raw_messages` 經 batch 產生的 `conversation_chunks` 與 `hourly_summaries`。
 - 新訊息 runtime 只即時寫入 raw；embedding、chunk、summary 由日終 batch 產生。
 - retrieval 採 summary-first hybrid：先查 `hourly_summaries`，再取時間對齊 chunks，另以 global chunks 作為 summary miss fallback。
+- 第一版 retrieval 可加入 author/time metadata intent：明確成員或時間可先 hard filter，無結果時必須降級為一般 retrieval 或 soft boost，且回答不得把 filtered empty 解釋成完整歷史否定。
 - active session 預設沿用上一輪 retrieval context，只有 router 判定需要時才重查 RAG；session DB、RAG 或 retrieval partial failure 可降級成一般 AI 回答。
 
 ## 6. 工程與成本邊界
