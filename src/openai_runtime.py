@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import urllib.error
 import urllib.request
 
 from src.runtime import LLMResult
+
+
+SUMMARY_SYSTEM_PROMPT_PATH = Path("prompts/summary_system.md")
 
 
 class OpenAIResponsesClient:
@@ -20,12 +24,15 @@ class OpenAIResponsesClient:
         model: str,
         timeout_seconds: float,
         max_output_tokens: int,
+        instructions: str | None = None,
     ) -> LLMResult:
         payload = {
             "model": model,
             "input": prompt,
             "max_output_tokens": max_output_tokens,
         }
+        if instructions:
+            payload["instructions"] = instructions
         response = self._post(payload, timeout_seconds)
         text = _extract_output_text(response)
         usage = response.get("usage") if isinstance(response.get("usage"), dict) else {}
@@ -128,7 +135,14 @@ class OpenAIEmbeddingBatchClient:
 
 
 class OpenAISummaryClient:
-    def __init__(self, *, api_key: str, model: str, timeout_seconds: float) -> None:
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        model: str,
+        timeout_seconds: float,
+        prompt_path: Path = SUMMARY_SYSTEM_PROMPT_PATH,
+    ) -> None:
         if not api_key:
             raise RuntimeError("OPENAI_API_KEY is required for batch summary calls")
         if not model:
@@ -136,6 +150,7 @@ class OpenAISummaryClient:
         self.client = OpenAIResponsesClient(api_key)
         self.model = model
         self.timeout_seconds = timeout_seconds
+        self.instructions = prompt_path.read_text(encoding="utf-8").strip()
 
     def summarize(self, text: str, *, max_output_tokens: int) -> str:
         result = self.client.answer(
@@ -143,6 +158,7 @@ class OpenAISummaryClient:
             model=self.model,
             timeout_seconds=self.timeout_seconds,
             max_output_tokens=max_output_tokens,
+            instructions=self.instructions,
         )
         return result.text
 
