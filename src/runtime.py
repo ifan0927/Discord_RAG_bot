@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from decimal import Decimal
 import json
 import logging
 import time
@@ -80,12 +81,24 @@ class RetrievalContext:
 
 
 @dataclass(frozen=True)
+class RetrievalResolution:
+    context: RetrievalContext
+    router_decision: str
+
+
+@dataclass(frozen=True)
+class RouterDecision:
+    should_retrieve: bool
+    log_value: str
+
+
+@dataclass(frozen=True)
 class LLMResult:
     text: str
     model: str
     token_input: int | None = None
     token_output: int | None = None
-    estimated_cost: float | None = None
+    estimated_cost: str | None = None
 
 
 @dataclass(frozen=True)
@@ -261,7 +274,10 @@ class MentionRuntime:
         now = _utc_now()
         failure_flags = ["raw_upsert_failed"] if raw_upsert_failed else []
         session = await self._get_session(message, now, failure_flags)
-        retrieval = await self._resolve_retrieval(session, user_query, failure_flags)
+        retrieval_resolution = await self._resolve_retrieval(
+            session, user_query, failure_flags
+        )
+        retrieval = retrieval_resolution.context
         prompt = assemble_answer_prompt(
             self.answer_system_prompt,
             retrieval,
@@ -288,6 +304,7 @@ class MentionRuntime:
                         message=message,
                         session=session,
                         retrieval=retrieval,
+                        router_decision=retrieval_resolution.router_decision,
                         llm_result=llm_result,
                         failure_flags=failure_flags,
                         error=exc,
@@ -322,6 +339,7 @@ class MentionRuntime:
             message=message,
             session=session,
             retrieval=retrieval,
+            router_decision=retrieval_resolution.router_decision,
             llm_result=llm_result,
             failure_flags=failure_flags,
             started=started,
@@ -371,20 +389,33 @@ class MentionRuntime:
 
     async def _resolve_retrieval(
         self, session: SessionState | None, user_query: str, failure_flags: list[str]
-    ) -> RetrievalContext:
+    ) -> RetrievalResolution:
         should_retrieve = True
+        router_decision = "not_needed"
+        if session is None:
+            router_decision = "not_needed_stateless"
+        elif not session.retrieved_chunk_keys or not session.last_rag_query:
+            router_decision = "not_needed_missing_provenance"
         if session and session.retrieved_chunk_keys and session.last_rag_query:
-            should_retrieve = await self._router_decision(session, user_query, failure_flags)
+            router_decision_result = await self._router_decision(
+                session, user_query, failure_flags
+            )
+            should_retrieve = router_decision_result.should_retrieve
+            router_decision = router_decision_result.log_value
         if session and not should_retrieve:
             try:
-                return await _run_blocking(
+                retrieval = await _run_blocking(
                     self.settings.retrieval_db_query_timeout_seconds,
                     self.store.load_context_by_keys,
                     session.retrieved_summary_keys, session.retrieved_chunk_keys
                 )
+                return RetrievalResolution(retrieval, router_decision)
             except Exception:
                 failure_flags.append("retrieval_context_missing")
-                return RetrievalContext([], [], "retrieval_context_missing")
+                return RetrievalResolution(
+                    RetrievalContext([], [], "retrieval_context_missing"),
+                    router_decision,
+                )
         try:
             embedding = await _run_blocking(
                 self.settings.query_embedding_timeout_seconds,
@@ -400,20 +431,26 @@ class MentionRuntime:
                 self.settings,
             )
             if not retrieval.has_context and retrieval.status == "retrieved":
-                return RetrievalContext([], [], "retrieval_empty")
-            return retrieval
+                return RetrievalResolution(
+                    RetrievalContext([], [], "retrieval_empty"),
+                    router_decision,
+                )
+            return RetrievalResolution(retrieval, router_decision)
         except Exception:
             failure_flags.append("retrieval_failed")
-            return RetrievalContext([], [], "retrieval_failed")
+            return RetrievalResolution(
+                RetrievalContext([], [], "retrieval_failed"),
+                router_decision,
+            )
 
     async def _router_decision(
         self, session: SessionState, user_query: str, failure_flags: list[str]
-    ) -> bool:
+    ) -> RouterDecision:
         prompt = assemble_router_prompt(
             self.router_prompt, session, user_query, self.settings.router_session_turns
         )
         try:
-            return await _run_blocking(
+            should_retrieve = await _run_blocking(
                 self.settings.router_timeout_seconds,
                 self.router_client.should_retrieve,
                 prompt,
@@ -421,13 +458,20 @@ class MentionRuntime:
                 timeout_seconds=self.settings.router_timeout_seconds,
                 max_output_tokens=self.settings.router_max_output_tokens,
             )
+            return RouterDecision(
+                should_retrieve=should_retrieve,
+                log_value="retrieve" if should_retrieve else "reuse",
+            )
         except Exception:
             failure_flags.append("router_failed")
-            return False
+            return RouterDecision(
+                should_retrieve=False,
+                log_value="failed_defaulted_reuse",
+            )
 
     async def _answer(self, prompt: str, failure_flags: list[str]) -> LLMResult | None:
         try:
-            return await _run_blocking(
+            result = await _run_blocking(
                 self.settings.answer_timeout_seconds,
                 self.answer_client.answer,
                 prompt,
@@ -435,16 +479,26 @@ class MentionRuntime:
                 timeout_seconds=self.settings.answer_timeout_seconds,
                 max_output_tokens=self.settings.answer_max_output_tokens,
             )
+            return _with_estimated_cost(
+                result,
+                self.settings.runtime_answer_input_price_per_1m_tokens,
+                self.settings.runtime_answer_output_price_per_1m_tokens,
+            )
         except Exception:
             failure_flags.append("answer_failed")
         try:
-            return await _run_blocking(
+            result = await _run_blocking(
                 self.settings.fallback_timeout_seconds,
                 self.fallback_client.answer,
                 prompt,
                 model=self.settings.fallback_model,
                 timeout_seconds=self.settings.fallback_timeout_seconds,
                 max_output_tokens=self.settings.answer_max_output_tokens,
+            )
+            return _with_estimated_cost(
+                result,
+                self.settings.runtime_fallback_input_price_per_1m_tokens,
+                self.settings.runtime_fallback_output_price_per_1m_tokens,
             )
         except Exception:
             failure_flags.append("fallback_failed")
@@ -499,6 +553,7 @@ class MentionRuntime:
         request_id: str | None = None,
         session: SessionState | None = None,
         retrieval: RetrievalContext | None = None,
+        router_decision: str | None = None,
         llm_result: LLMResult | None = None,
         failure_flags: list[str] | None = None,
         error: Exception | None = None,
@@ -517,7 +572,7 @@ class MentionRuntime:
             "message_id": str(message.message_id),
             "session_id": session.session_id if session else None,
             "is_degraded": bool(failure_flags),
-            "router_decision": None,
+            "router_decision": router_decision,
             "retrieval_status": retrieval.status if retrieval else None,
             "retrieved_chunk_keys": retrieval.chunk_keys if retrieval else [],
             "retrieved_summary_keys": retrieval.summary_keys if retrieval else [],
@@ -607,6 +662,31 @@ def _truncate_discord_reply(reply: str) -> str:
         return reply
     suffix = "\n\n（回覆過長，已截斷。）"
     return reply[: DISCORD_SINGLE_MESSAGE_LIMIT - len(suffix)].rstrip() + suffix
+
+
+def _with_estimated_cost(
+    result: LLMResult,
+    input_price_per_1m_tokens: Decimal | None,
+    output_price_per_1m_tokens: Decimal | None,
+) -> LLMResult:
+    if (
+        result.token_input is None
+        or result.token_output is None
+        or input_price_per_1m_tokens is None
+        or output_price_per_1m_tokens is None
+    ):
+        return result
+    cost = (
+        Decimal(result.token_input) * input_price_per_1m_tokens
+        + Decimal(result.token_output) * output_price_per_1m_tokens
+    ) / Decimal(1_000_000)
+    return LLMResult(
+        text=result.text,
+        model=result.model,
+        token_input=result.token_input,
+        token_output=result.token_output,
+        estimated_cost=str(cost.quantize(Decimal("0.000001"))),
+    )
 
 
 def _utc_now() -> datetime:

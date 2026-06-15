@@ -4,7 +4,11 @@ import json
 import unittest
 from unittest import mock
 
-from src.openai_runtime import OpenAIEmbeddingBatchClient, OpenAISummaryClient
+from src.openai_runtime import (
+    OpenAIEmbeddingBatchClient,
+    OpenAIResponsesClient,
+    OpenAISummaryClient,
+)
 from src.runtime import LLMResult
 
 
@@ -23,6 +27,28 @@ class FakeHttpResponse:
 
 
 class OpenAIRuntimeTest(unittest.TestCase):
+    def test_responses_client_extracts_answer_usage(self):
+        payload = {
+            "output_text": "answer",
+            "usage": {
+                "input_tokens": 123,
+                "output_tokens": 45,
+            },
+        }
+
+        with mock.patch("urllib.request.urlopen", return_value=FakeHttpResponse(payload)):
+            result = OpenAIResponsesClient("sk-test").answer(
+                "prompt",
+                model="gpt-5.4-mini",
+                timeout_seconds=12.5,
+                max_output_tokens=300,
+            )
+
+        self.assertEqual(result.text, "answer")
+        self.assertEqual(result.model, "gpt-5.4-mini")
+        self.assertEqual(result.token_input, 123)
+        self.assertEqual(result.token_output, 45)
+
     def test_embedding_batch_client_returns_embeddings_in_input_order(self):
         payload = {
             "data": [
