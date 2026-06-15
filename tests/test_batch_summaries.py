@@ -58,15 +58,27 @@ class FakeEmbeddingProvider:
 
 
 class FakeSummaryProvider:
-    def __init__(self, fail=False):
+    def __init__(self, fail=False, text=None):
         self.fail = fail
+        self.text = text
         self.calls = []
 
     def summarize(self, text, *, max_output_tokens):
         self.calls.append((text, max_output_tokens))
         if self.fail:
             raise RuntimeError("summary provider failed")
-        return "generated summary"
+        if self.text is not None:
+            return self.text
+        return "\n".join(
+            [
+                "時間範圍: 2026-06-10 09:00-10:00 Asia/Taipei",
+                "參與者: author:9001, author:9002",
+                "重點:",
+                "- author:9001 和 author:9002 討論可回查的事項。",
+                "待回查線索:",
+                "- author:9001 message 1",
+            ]
+        )
 
 
 def settings(root: Path, **overrides):
@@ -145,6 +157,10 @@ class BatchSummariesTest(unittest.TestCase):
 
         self.assertEqual(result.status, "success")
         self.assertEqual(summary_provider.calls, [])
+        self.assertIn("時間範圍: 2026-06-10 09:00-10:00 Asia/Taipei", staged["summary_text"])
+        self.assertIn("參與者: author:9001, author:9002, author:9003", staged["summary_text"])
+        self.assertIn("重點:", staged["summary_text"])
+        self.assertIn("待回查線索:", staged["summary_text"])
         self.assertIn("author:9001 message 1", staged["summary_text"])
         self.assertEqual(manifest["fallback_counts"]["summaries"], 1)
         self.assertEqual(manifest["summary_llm_error_count"], 0)
@@ -187,8 +203,34 @@ class BatchSummariesTest(unittest.TestCase):
             manifest = json.loads(Path(result.manifest_path).read_text(encoding="utf-8"))
 
         self.assertEqual(result.status, "success")
-        self.assertEqual(staged["summary_text"], "generated summary")
+        self.assertIn("重點:", staged["summary_text"])
+        self.assertIn("author:9001", staged["summary_text"])
         self.assertEqual(manifest["fallback_counts"]["summaries"], 0)
+
+    def test_unstructured_summary_provider_output_falls_back_to_structured_raw_lines(self):
+        rows = [raw_row(index, 9, index) for index in range(1, 6)]
+        fake_conn = FakeConnection(raw_rows=rows)
+        with tempfile.TemporaryDirectory() as tmp:
+            result = run_summaries_batch(
+                database_url="postgresql://local/test",
+                day=date(2026, 6, 10),
+                embedding_provider=FakeEmbeddingProvider(),
+                summary_provider=FakeSummaryProvider(text="generic generated summary"),
+                settings=settings(Path(tmp), summary_llm_max_retries=0),
+                schema_checker=lambda database_url: FakeSchema(ok=True),
+                connect=lambda database_url: fake_conn,
+            )
+            line = (Path(result.staging_dir) / "summaries.jsonl").read_text(encoding="utf-8").splitlines()[0]
+            staged = json.loads(line)
+            manifest = json.loads(Path(result.manifest_path).read_text(encoding="utf-8"))
+
+        self.assertEqual(result.status, "success")
+        self.assertIn("時間範圍: 2026-06-10 09:00-10:00 Asia/Taipei", staged["summary_text"])
+        self.assertIn("參與者: author:9001, author:9002, author:9003, author:9004, author:9005", staged["summary_text"])
+        self.assertIn("待回查線索:", staged["summary_text"])
+        self.assertIn("author:9001 message 1", staged["summary_text"])
+        self.assertEqual(manifest["fallback_counts"]["summaries"], 1)
+        self.assertEqual(manifest["summary_llm_error_count"], 1)
 
     def test_taipei_day_boundary_selects_only_target_day_rows(self):
         rows = [

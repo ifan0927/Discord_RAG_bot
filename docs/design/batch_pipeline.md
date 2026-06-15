@@ -180,9 +180,20 @@ validation 最低檢查：
 - summary LLM input token budget 為 `SUMMARY_INPUT_TOKEN_BUDGET=6000`。
 - input 超過 budget 時保留該小時開頭與結尾訊息，中間截斷。
 - summary LLM output 上限 `SUMMARY_MAX_OUTPUT_TOKENS=300`。
+- summary text 必須使用固定欄位格式，讓 retrieval 命中後 answer prompt 可直接看出時間、參與者、重點與回查線索。
+- 若 summary LLM 輸出缺少必要欄位或完全沒有任何輸入訊息中的 `author:<id>`，視為無效輸出並 fallback。
 
 summary prompt 約束：
 
+- 固定輸出欄位：
+  - `時間範圍: <YYYY-MM-DD HH:MM-HH:MM Asia/Taipei>`
+  - `參與者: author:<id>, author:<id>`
+  - `重點:`
+  - `待回查線索:`
+- `參與者` 與重要 bullet 必須保留穩定 `author:<id>`；batch 不寫 username / nickname snapshot。
+- 優先保存具 retrieval 價值的事件、決定、計畫、問題、推薦、未解事項與共享事實。
+- 省略問候、寒暄、無後續檢索價值的玩笑與泛稱「大家在聊天」。
+- 若該小時沒有可用長期記憶，使用固定 bullet：`無可用長期記憶`。
 - 只摘要輸入訊息中明確出現的內容。
 - 不補全。
 - 不做人格評價。
