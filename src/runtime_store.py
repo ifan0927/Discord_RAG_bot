@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import hashlib
 import json
 from typing import Any
 from uuid import uuid4
@@ -232,9 +233,15 @@ def _session_from_row(row: Any, *, is_new: bool) -> SessionState:
 
 def _lock_session(conn: Any, channel_id: int) -> None:
     conn.execute(
-        "SELECT pg_advisory_xact_lock(%(namespace)s, %(channel_id)s)",
-        {"namespace": SESSION_LOCK_NAMESPACE, "channel_id": channel_id},
+        "SELECT pg_advisory_xact_lock(%(lock_key)s)",
+        {"lock_key": _session_lock_key(channel_id)},
     )
+
+
+def _session_lock_key(channel_id: int) -> int:
+    raw_key = f"{SESSION_LOCK_NAMESPACE}:{channel_id}".encode("ascii")
+    unsigned_key = int.from_bytes(hashlib.sha256(raw_key).digest()[:8], "big")
+    return unsigned_key - (1 << 63)
 
 
 def _select_summaries(
