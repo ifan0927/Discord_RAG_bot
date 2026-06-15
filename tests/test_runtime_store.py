@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import unittest
 
 from src.config import Settings
+from src.member_identity import RetrievalIntent, TimeWindow
 from src.runtime import RetrievedChunk, RetrievedSummary
 from src.runtime_store import PostgresRuntimeStore, _session_lock_key
 
@@ -21,11 +23,18 @@ class FakeResult:
 
 
 class FakeConnection:
-    def __init__(self, summary_rows=None, aligned_rows=None, chunk_rows=None):
+    def __init__(
+        self,
+        summary_rows=None,
+        aligned_rows=None,
+        chunk_rows=None,
+        honor_metadata_filters: bool = False,
+    ):
         self.executions = []
         self.summary_rows = summary_rows or []
         self.aligned_rows = aligned_rows or []
         self.chunk_rows = chunk_rows or []
+        self.honor_metadata_filters = honor_metadata_filters
 
     def __enter__(self):
         return self
@@ -35,6 +44,10 @@ class FakeConnection:
 
     def execute(self, sql, params=None):
         self.executions.append((sql, params or {}))
+        if self.honor_metadata_filters and (
+            "author_ids" in (params or {}) or "window_start" in (params or {})
+        ):
+            return FakeResult([])
         if "FROM ranked_chunks" in sql:
             return FakeResult(self.aligned_rows)
         if "FROM conversation_chunks" in sql and "chunk_text" in sql:
@@ -59,7 +72,7 @@ class RuntimeStoreTest(unittest.TestCase):
             global_chunk_fallback_top_k=2,
         )
 
-        store.retrieve_context([0.1] * 1536, settings)
+        store.retrieve_context([0.1] * 1536, settings, RetrievalIntent())
 
         executed_sql = "\n".join(sql for sql, _params in fake_conn.executions)
         params = [params for _sql, params in fake_conn.executions]
@@ -84,11 +97,108 @@ class RuntimeStoreTest(unittest.TestCase):
             summary_strategy_version="hourly-v1",
         )
 
-        context = store.retrieve_context([0.1] * 1536, settings)
+        context = store.retrieve_context([0.1] * 1536, settings, RetrievalIntent())
 
         self.assertEqual(context.chunks[0].chunk_key, "chunk-1")
         self.assertEqual(context.chunks[0].source, "aligned")
         self.assertEqual(context.chunks[0].summary_key, "summary-1")
+
+    def test_retrieve_context_applies_author_and_time_filters(self):
+        fake_conn = FakeConnection(summary_rows=[("summary-1", "summary text")])
+        store = PostgresRuntimeStore("postgresql://local/test", connect=lambda _url: fake_conn)
+        settings = Settings(
+            bot_token="token",
+            guild_id=1,
+            channel_id=2,
+            chunk_strategy_version="timegap-v1",
+            summary_strategy_version="hourly-v1",
+        )
+
+        context = store.retrieve_context(
+            [0.1] * 1536,
+            settings,
+            RetrievalIntent(
+                target_author_ids=(456,),
+                target_time_window=TimeWindow(
+                    datetime(2026, 6, 12, tzinfo=timezone.utc),
+                    datetime(2026, 6, 13, tzinfo=timezone.utc),
+                ),
+            ),
+        )
+
+        executed_sql = "\n".join(sql for sql, _params in fake_conn.executions)
+        params = [params for _sql, params in fake_conn.executions]
+        self.assertIn("raw.author_id = ANY(%(author_ids)s)", executed_sql)
+        self.assertIn("hourly_summaries.hour_start < %(window_end)s", executed_sql)
+        self.assertIn("chunk.start_at < %(window_end)s", executed_sql)
+        self.assertEqual(params[0]["author_ids"], [456])
+        self.assertIn("window_start", params[0])
+        self.assertEqual(context.retrieval_filter_status, ("author_time_filter",))
+
+    def test_retrieve_context_falls_back_when_filtered_attempt_is_empty(self):
+        fake_conn = FakeConnection(
+            summary_rows=[],
+            chunk_rows=[("chunk-1", "general chunk")],
+            honor_metadata_filters=True,
+        )
+        store = PostgresRuntimeStore("postgresql://local/test", connect=lambda _url: fake_conn)
+        settings = Settings(
+            bot_token="token",
+            guild_id=1,
+            channel_id=2,
+            chunk_strategy_version="timegap-v1",
+            summary_strategy_version="hourly-v1",
+        )
+
+        context = store.retrieve_context(
+            [0.1] * 1536,
+            settings,
+            RetrievalIntent(target_author_ids=(456,)),
+        )
+
+        self.assertEqual(context.chunk_keys, ["chunk-1"])
+        self.assertEqual(
+            context.retrieval_filter_status,
+            ("author_filter_empty",),
+        )
+
+    def test_retrieve_context_relaxes_combined_filter_to_author_only(self):
+        class CombinedFallbackConnection(FakeConnection):
+            def execute(self, sql, params=None):
+                self.executions.append((sql, params or {}))
+                if "author_ids" in (params or {}) and "window_start" in (params or {}):
+                    return FakeResult([])
+                if "FROM conversation_chunks" in sql and "chunk_text" in sql:
+                    return FakeResult([("chunk-1", "author-only chunk")])
+                return FakeResult([])
+
+        fake_conn = CombinedFallbackConnection()
+        store = PostgresRuntimeStore("postgresql://local/test", connect=lambda _url: fake_conn)
+        settings = Settings(
+            bot_token="token",
+            guild_id=1,
+            channel_id=2,
+            chunk_strategy_version="timegap-v1",
+            summary_strategy_version="hourly-v1",
+        )
+
+        context = store.retrieve_context(
+            [0.1] * 1536,
+            settings,
+            RetrievalIntent(
+                target_author_ids=(456,),
+                target_time_window=TimeWindow(
+                    datetime(2026, 6, 12, tzinfo=timezone.utc),
+                    datetime(2026, 6, 13, tzinfo=timezone.utc),
+                ),
+            ),
+        )
+
+        self.assertEqual(context.chunk_keys, ["chunk-1"])
+        self.assertEqual(
+            context.retrieval_filter_status,
+            ("author_time_filter_empty", "author_filter"),
+        )
 
     def test_load_context_by_keys_keeps_reused_chunks_global_without_provenance(self):
         fake_conn = FakeConnection(

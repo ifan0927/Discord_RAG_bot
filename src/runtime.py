@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
 import json
@@ -11,6 +11,16 @@ from typing import Any, Awaitable, Callable, Protocol
 from uuid import uuid4
 
 from src.config import Settings
+from src.member_identity import (
+    MemberIdentity,
+    MemberIdentityContext,
+    RetrievalIntent,
+    build_member_identity_context,
+    build_retrieval_intent,
+    identity_status,
+    render_author_names,
+    render_member_identity_block,
+)
 from src.message_normalization import MessageNormalizationInput, normalize_message
 
 
@@ -36,6 +46,10 @@ class RuntimeMessage:
     has_stickers: bool = False
     has_embeds: bool = False
     is_system_message: bool = False
+    caller_display_name: str | None = None
+    mentioned_members: tuple[MemberIdentity, ...] = ()
+    unknown_member_ids: tuple[int, ...] = ()
+    member_identity_status: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -67,6 +81,7 @@ class RetrievalContext:
     summaries: list[RetrievedSummary]
     chunks: list[RetrievedChunk]
     status: str
+    retrieval_filter_status: tuple[str, ...] = field(default_factory=tuple)
 
     @property
     def summary_keys(self) -> list[str]:
@@ -127,7 +142,10 @@ class RuntimeStore(Protocol):
         ...
 
     def retrieve_context(
-        self, query_embedding: list[float], settings: Settings
+        self,
+        query_embedding: list[float],
+        settings: Settings,
+        intent: RetrievalIntent,
     ) -> RetrievalContext:
         ...
 
@@ -274,9 +292,11 @@ class MentionRuntime:
         started = time.monotonic()
         now = _utc_now()
         failure_flags = ["raw_upsert_failed"] if raw_upsert_failed else []
+        identity = self._member_identity(message)
+        retrieval_intent = build_retrieval_intent(user_query, identity, now)
         session = await self._get_session(message, now, failure_flags)
         retrieval_resolution = await self._resolve_retrieval(
-            session, user_query, failure_flags
+            session, user_query, retrieval_intent, failure_flags
         )
         retrieval = retrieval_resolution.context
         prompt = assemble_answer_prompt(
@@ -285,6 +305,7 @@ class MentionRuntime:
             session.turns if session else [],
             user_query,
             self.settings,
+            identity,
         )
         llm_result = await self._answer(prompt, failure_flags)
         reply = _truncate_discord_reply(llm_result.text if llm_result else LLM_FAILED_REPLY)
@@ -306,6 +327,8 @@ class MentionRuntime:
                         session=session,
                         retrieval=retrieval,
                         router_decision=retrieval_resolution.router_decision,
+                        identity=identity,
+                        retrieval_intent=retrieval_intent,
                         llm_result=llm_result,
                         failure_flags=failure_flags,
                         error=exc,
@@ -341,6 +364,8 @@ class MentionRuntime:
             session=session,
             retrieval=retrieval,
             router_decision=retrieval_resolution.router_decision,
+            identity=identity,
+            retrieval_intent=retrieval_intent,
             llm_result=llm_result,
             failure_flags=failure_flags,
             started=started,
@@ -375,6 +400,15 @@ class MentionRuntime:
             is_system_message=message.is_system_message,
         )
 
+    def _member_identity(self, message: RuntimeMessage) -> MemberIdentityContext:
+        return build_member_identity_context(
+            caller_id=message.author_id,
+            caller_display_name=message.caller_display_name,
+            mentioned_members=message.mentioned_members,
+            unknown_member_ids=message.unknown_member_ids,
+            status=message.member_identity_status,
+        )
+
     async def _get_session(
         self, message: RuntimeMessage, now: datetime, failure_flags: list[str]
     ) -> SessionState | None:
@@ -389,7 +423,11 @@ class MentionRuntime:
             return None
 
     async def _resolve_retrieval(
-        self, session: SessionState | None, user_query: str, failure_flags: list[str]
+        self,
+        session: SessionState | None,
+        user_query: str,
+        retrieval_intent: RetrievalIntent,
+        failure_flags: list[str],
     ) -> RetrievalResolution:
         should_retrieve = True
         router_decision = "not_needed"
@@ -430,10 +468,16 @@ class MentionRuntime:
                 self.store.retrieve_context,
                 embedding,
                 self.settings,
+                retrieval_intent,
             )
             if not retrieval.has_context and retrieval.status == "retrieved":
                 return RetrievalResolution(
-                    RetrievalContext([], [], "retrieval_empty"),
+                    RetrievalContext(
+                        [],
+                        [],
+                        "retrieval_empty",
+                        retrieval.retrieval_filter_status,
+                    ),
                     router_decision,
                 )
             return RetrievalResolution(retrieval, router_decision)
@@ -555,6 +599,8 @@ class MentionRuntime:
         session: SessionState | None = None,
         retrieval: RetrievalContext | None = None,
         router_decision: str | None = None,
+        identity: MemberIdentityContext | None = None,
+        retrieval_intent: RetrievalIntent | None = None,
         llm_result: LLMResult | None = None,
         failure_flags: list[str] | None = None,
         error: Exception | None = None,
@@ -575,6 +621,16 @@ class MentionRuntime:
             "is_degraded": bool(failure_flags),
             "router_decision": router_decision,
             "retrieval_status": retrieval.status if retrieval else None,
+            "target_author_ids": list(retrieval_intent.target_author_ids)
+            if retrieval_intent
+            else [],
+            "target_time_window": retrieval_intent.target_time_window.log_value()
+            if retrieval_intent and retrieval_intent.target_time_window
+            else None,
+            "member_identity_status": list(identity_status(identity)) if identity else [],
+            "retrieval_filter_status": list(retrieval.retrieval_filter_status)
+            if retrieval
+            else [],
             "retrieved_chunk_keys": retrieval.chunk_keys if retrieval else [],
             "retrieved_summary_keys": retrieval.summary_keys if retrieval else [],
             "answer_model": llm_result.model if llm_result else self.settings.answer_model,
@@ -597,13 +653,18 @@ def assemble_answer_prompt(
     turns: list[dict[str, Any]],
     user_query: str,
     settings: Settings,
+    identity: MemberIdentityContext | None = None,
 ) -> str:
     prompt_turns = turns[-settings.session_prompt_turns :]
     context_budget = int(settings.prompt_input_token_budget * settings.rag_context_budget_ratio)
     context_text = _truncate_chars(_format_retrieval_context(retrieval), context_budget * 4)
     parts = [system_prompt.strip()]
+    if identity:
+        parts.append(render_member_identity_block(identity))
     if context_text:
-        parts.append(context_text)
+        parts.append(
+            render_author_names(context_text, identity) if identity else context_text
+        )
     if prompt_turns:
         parts.append("最近 session turns:\n" + _format_turns(prompt_turns))
     parts.append("current user query:\n" + user_query)
