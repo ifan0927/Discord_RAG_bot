@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from decimal import Decimal
+import io
+import json
+import logging
 import unittest
 
 from src.config import Settings
@@ -27,6 +31,21 @@ def settings() -> Settings:
         database_url="postgresql://local/test",
         chunk_strategy_version="timegap-v1",
         summary_strategy_version="hourly-v1",
+    )
+
+
+def settings_with_runtime_prices() -> Settings:
+    return Settings(
+        bot_token="token",
+        guild_id=1,
+        channel_id=2,
+        database_url="postgresql://local/test",
+        chunk_strategy_version="timegap-v1",
+        summary_strategy_version="hourly-v1",
+        runtime_answer_input_price_per_1m_tokens=Decimal("0.75"),
+        runtime_answer_output_price_per_1m_tokens=Decimal("4.50"),
+        runtime_fallback_input_price_per_1m_tokens=Decimal("0.75"),
+        runtime_fallback_output_price_per_1m_tokens=Decimal("4.50"),
     )
 
 
@@ -135,6 +154,22 @@ class SentReplies:
         self.replies.append(reply)
 
 
+class CapturedRuntimeLogger:
+    def __init__(self):
+        self.stream = io.StringIO()
+        self.logger = logging.getLogger(f"test.runtime.{id(self)}")
+        self.logger.handlers = []
+        self.logger.propagate = False
+        self.logger.setLevel(logging.INFO)
+        handler = logging.StreamHandler(self.stream)
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        self.logger.addHandler(handler)
+
+    def payloads(self):
+        lines = [line for line in self.stream.getvalue().splitlines() if line]
+        return [json.loads(line) for line in lines]
+
+
 class MentionRuntimeTest(unittest.IsolatedAsyncioTestCase):
     async def test_non_mention_upserts_raw_without_session_retrieval_or_llm(self):
         store = FakeStore()
@@ -210,6 +245,62 @@ class MentionRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("group summary", answer.calls[0][0])
         self.assertIn("group chunk", answer.calls[0][0])
 
+    async def test_successful_answer_logs_metadata_usage_router_and_cost(self):
+        retrieval = RetrievalContext(
+            summaries=[RetrievedSummary("summary-1", "private summary text")],
+            chunks=[RetrievedChunk("chunk-1", "private chunk text", "aligned")],
+            status="retrieved",
+        )
+        store = FakeStore(retrieval=retrieval)
+        captured = CapturedRuntimeLogger()
+        runtime = MentionRuntime(
+            settings_with_runtime_prices(),
+            store,
+            embedding_client=FakeEmbedding(),
+            answer_client=FakeAnswer("context answer"),
+            router_client=FakeRouter(),
+            logger=captured.logger,
+        )
+
+        await runtime.handle_message(
+            message(f"<@{BOT_ID}> explain this", mentioned=True),
+            SentReplies().send,
+        )
+
+        payload = captured.payloads()[-1]
+        self.assertEqual(payload["event"], "runtime_request_finished")
+        self.assertEqual(payload["status"], "answered")
+        self.assertEqual(payload["retrieval_status"], "retrieved")
+        self.assertEqual(payload["retrieved_summary_keys"], ["summary-1"])
+        self.assertEqual(payload["retrieved_chunk_keys"], ["chunk-1"])
+        self.assertEqual(payload["router_decision"], "not_needed_missing_provenance")
+        self.assertEqual(payload["answer_model"], "gpt-5.4-mini")
+        self.assertEqual(payload["token_input"], 10)
+        self.assertEqual(payload["token_output"], 5)
+        self.assertEqual(payload["estimated_cost"], "0.000030")
+        encoded = json.dumps(payload, ensure_ascii=False)
+        self.assertNotIn("private summary text", encoded)
+        self.assertNotIn("private chunk text", encoded)
+
+    async def test_answer_cost_remains_null_without_runtime_prices(self):
+        captured = CapturedRuntimeLogger()
+        runtime = MentionRuntime(
+            settings(),
+            FakeStore(),
+            embedding_client=FakeEmbedding(),
+            answer_client=FakeAnswer("answer"),
+            router_client=FakeRouter(),
+            logger=captured.logger,
+        )
+
+        await runtime.handle_message(
+            message(f"<@{BOT_ID}> hi", mentioned=True),
+            SentReplies().send,
+        )
+
+        payload = captured.payloads()[-1]
+        self.assertIsNone(payload["estimated_cost"])
+
     async def test_retrieval_failure_degrades_to_general_answer(self):
         store = FakeStore()
         answer = FakeAnswer("general answer")
@@ -263,6 +354,88 @@ class MentionRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(store.retrieve_calls, 0)
         self.assertEqual(store.load_context_calls, 1)
         self.assertEqual(store.append_calls[0][4], "previous query")
+
+    async def test_active_session_logs_router_reuse_decision(self):
+        session = SessionState(
+            "session-1",
+            [{"role": "user", "content": "previous"}],
+            ["chunk-1"],
+            ["summary-1"],
+            "previous query",
+        )
+        store = FakeStore(session=session)
+        captured = CapturedRuntimeLogger()
+        runtime = MentionRuntime(
+            settings(),
+            store,
+            embedding_client=FakeEmbedding(),
+            answer_client=FakeAnswer(),
+            router_client=FakeRouter(should_retrieve=False),
+            logger=captured.logger,
+        )
+
+        await runtime.handle_message(
+            message(f"<@{BOT_ID}> follow up", mentioned=True),
+            SentReplies().send,
+        )
+
+        self.assertEqual(captured.payloads()[-1]["router_decision"], "reuse")
+
+    async def test_active_session_logs_router_retrieve_decision(self):
+        session = SessionState(
+            "session-1",
+            [{"role": "user", "content": "previous"}],
+            ["chunk-1"],
+            ["summary-1"],
+            "previous query",
+        )
+        store = FakeStore(session=session)
+        captured = CapturedRuntimeLogger()
+        runtime = MentionRuntime(
+            settings(),
+            store,
+            embedding_client=FakeEmbedding(),
+            answer_client=FakeAnswer(),
+            router_client=FakeRouter(should_retrieve=True),
+            logger=captured.logger,
+        )
+
+        await runtime.handle_message(
+            message(f"<@{BOT_ID}> new topic", mentioned=True),
+            SentReplies().send,
+        )
+
+        self.assertEqual(captured.payloads()[-1]["router_decision"], "retrieve")
+        self.assertEqual(store.retrieve_calls, 1)
+        self.assertEqual(store.load_context_calls, 0)
+
+    async def test_active_session_logs_router_failed_default(self):
+        session = SessionState(
+            "session-1",
+            [{"role": "user", "content": "previous"}],
+            ["chunk-1"],
+            ["summary-1"],
+            "previous query",
+        )
+        store = FakeStore(session=session)
+        captured = CapturedRuntimeLogger()
+        runtime = MentionRuntime(
+            settings(),
+            store,
+            embedding_client=FakeEmbedding(),
+            answer_client=FakeAnswer(),
+            router_client=FakeRouter(fail=True),
+            logger=captured.logger,
+        )
+
+        await runtime.handle_message(
+            message(f"<@{BOT_ID}> follow up", mentioned=True),
+            SentReplies().send,
+        )
+
+        payload = captured.payloads()[-1]
+        self.assertEqual(payload["router_decision"], "failed_defaulted_reuse")
+        self.assertIn("router_failed", payload["failure_flags"])
 
     async def test_session_is_not_updated_when_send_fails(self):
         store = FakeStore()

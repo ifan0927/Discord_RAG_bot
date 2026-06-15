@@ -342,6 +342,7 @@ bot 啟動時必須 validate 所有必要設定：
 ## Runtime Structured Logs
 
 runtime request logging 使用單行 structured JSON application log，不新增 DB request log table 或 usage table。
+bot process 啟動時必須設定 Python logging，讓 runtime info/error application logs 輸出到 stdout/stderr，供 `tee` 或 tmux 觀察 log 捕捉。
 
 Common required fields：
 
@@ -372,6 +373,16 @@ Runtime request log fields：
 - `token_output`
 - `estimated_cost`
 - `failure_flags`
+
+`router_decision` 必須是 metadata-only 狀態字串，至少可區分：
+
+- `not_needed_stateless`：session DB 不可用或無 session，未呼叫 router。
+- `not_needed_missing_provenance`：session 沒有可沿用的 retrieved keys 或 `last_rag_query`，未呼叫 router。
+- `retrieve`：router 成功回覆應重新 retrieval。
+- `reuse`：router 成功回覆可沿用既有 retrieval context。
+- `failed_defaulted_reuse`：router timeout、API error 或 parse failure，依 fallback 規則沿用既有 retrieval context。
+
+`estimated_cost` 只在 provider 回傳 token usage 且 runtime answer/fallback 單價設定完整時填入；單價或 usage 缺失時保持 `null`，不得硬編未設定單價或捏造 usage。runtime answer/fallback 單價設定使用 `RUNTIME_ANSWER_INPUT_PRICE_PER_1M_TOKENS`、`RUNTIME_ANSWER_OUTPUT_PRICE_PER_1M_TOKENS`、`RUNTIME_FALLBACK_INPUT_PRICE_PER_1M_TOKENS`、`RUNTIME_FALLBACK_OUTPUT_PRICE_PER_1M_TOKENS`，單位為 USD / 1M tokens。
 
 `request_id` 必須貫穿 raw upsert、session、retrieval、LLM call、Discord send 與 final request log。
 

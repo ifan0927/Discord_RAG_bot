@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from decimal import Decimal
 import os
 from pathlib import Path
 
@@ -42,6 +43,10 @@ class Settings:
     answer_max_output_tokens: int = 1024
     answer_timeout_seconds: float = 45
     fallback_timeout_seconds: float = 15
+    runtime_answer_input_price_per_1m_tokens: Decimal | None = None
+    runtime_answer_output_price_per_1m_tokens: Decimal | None = None
+    runtime_fallback_input_price_per_1m_tokens: Decimal | None = None
+    runtime_fallback_output_price_per_1m_tokens: Decimal | None = None
     discord_send_retry_count: int = 1
     session_update_retry_count: int = 1
 
@@ -90,6 +95,16 @@ def _ratio(name: str, default: float) -> float:
     if value <= 0 or value > 1:
         raise RuntimeError(f"{name} must be between 0 and 1")
     return value
+
+
+def _optional_decimal(name: str) -> Decimal | None:
+    value = os.getenv(name)
+    if value is None or value == "":
+        return None
+    decimal = Decimal(value)
+    if decimal < 0:
+        raise RuntimeError(f"{name} must not be negative")
+    return decimal
 
 
 def _readable_path(name: str, default: str) -> Path:
@@ -143,6 +158,18 @@ def load_settings() -> Settings:
         answer_max_output_tokens=_positive_int("ANSWER_MAX_OUTPUT_TOKENS", 1024),
         answer_timeout_seconds=_positive_float("ANSWER_TIMEOUT_SECONDS", 45),
         fallback_timeout_seconds=_positive_float("FALLBACK_TIMEOUT_SECONDS", 15),
+        runtime_answer_input_price_per_1m_tokens=_optional_decimal(
+            "RUNTIME_ANSWER_INPUT_PRICE_PER_1M_TOKENS"
+        ),
+        runtime_answer_output_price_per_1m_tokens=_optional_decimal(
+            "RUNTIME_ANSWER_OUTPUT_PRICE_PER_1M_TOKENS"
+        ),
+        runtime_fallback_input_price_per_1m_tokens=_optional_decimal(
+            "RUNTIME_FALLBACK_INPUT_PRICE_PER_1M_TOKENS"
+        ),
+        runtime_fallback_output_price_per_1m_tokens=_optional_decimal(
+            "RUNTIME_FALLBACK_OUTPUT_PRICE_PER_1M_TOKENS"
+        ),
         discord_send_retry_count=_non_negative_int("DISCORD_SEND_RETRY_COUNT", 1),
         session_update_retry_count=_non_negative_int("SESSION_UPDATE_RETRY_COUNT", 1),
     )
