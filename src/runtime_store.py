@@ -7,6 +7,7 @@ from typing import Any
 from uuid import uuid4
 
 from src.config import Settings
+from src.member_identity import RetrievalIntent, TimeWindow
 from src.runtime import (
     RetrievalContext,
     RetrievedChunk,
@@ -124,15 +125,48 @@ class PostgresRuntimeStore:
             )
 
     def retrieve_context(
-        self, query_embedding: list[float], settings: Settings
+        self,
+        query_embedding: list[float],
+        settings: Settings,
+        intent: RetrievalIntent,
     ) -> RetrievalContext:
         with self.connect(self.database_url) as conn:
-            summaries = _select_summaries(conn, query_embedding, settings)
-            aligned = _select_aligned_chunks(conn, query_embedding, summaries, settings)
-            global_chunks = _select_global_chunks(
-                conn, query_embedding, [chunk.chunk_key for chunk in aligned], settings
-            )
-        return RetrievalContext(summaries, aligned + global_chunks, "retrieved")
+            attempts = _retrieval_attempts(intent)
+            empty_statuses: list[str] = []
+            for author_ids, time_window, status in attempts:
+                summaries = _select_summaries(
+                    conn,
+                    query_embedding,
+                    settings,
+                    author_ids=author_ids,
+                    time_window=time_window,
+                )
+                aligned = _select_aligned_chunks(
+                    conn,
+                    query_embedding,
+                    summaries,
+                    settings,
+                    author_ids=author_ids,
+                    time_window=time_window,
+                )
+                global_chunks = _select_global_chunks(
+                    conn,
+                    query_embedding,
+                    [chunk.chunk_key for chunk in aligned],
+                    settings,
+                    author_ids=author_ids,
+                    time_window=time_window,
+                )
+                context = RetrievalContext(
+                    summaries,
+                    aligned + global_chunks,
+                    "retrieved",
+                    tuple(empty_statuses + ([status] if status else [])),
+                )
+                if context.has_context or not status:
+                    return context
+                empty_statuses.append(f"{status}_empty")
+        return RetrievalContext([], [], "retrieved", tuple(empty_statuses))
 
     def load_context_by_keys(
         self, summary_keys: list[str], chunk_keys: list[str]
@@ -247,13 +281,24 @@ def _session_lock_key(channel_id: int) -> int:
 
 
 def _select_summaries(
-    conn: Any, query_embedding: list[float], settings: Settings
+    conn: Any,
+    query_embedding: list[float],
+    settings: Settings,
+    *,
+    author_ids: tuple[int, ...] = (),
+    time_window: TimeWindow | None = None,
 ) -> list[RetrievedSummary]:
+    filters, params = _metadata_filters(
+        "hourly_summaries",
+        author_ids=author_ids,
+        time_window=time_window,
+    )
     rows = conn.execute(
-        """
+        f"""
         SELECT summary_key, summary_text
         FROM hourly_summaries
         WHERE summary_strategy_version = %(strategy_version)s
+        {filters}
         ORDER BY embedding <=> %(query_embedding)s::vector
         LIMIT %(limit)s
         """,
@@ -261,6 +306,7 @@ def _select_summaries(
             "strategy_version": settings.summary_strategy_version,
             "query_embedding": query_embedding,
             "limit": settings.summary_top_k,
+            **params,
         },
     ).fetchall()
     return [RetrievedSummary(str(row[0]), str(row[1])) for row in rows]
@@ -271,11 +317,19 @@ def _select_aligned_chunks(
     query_embedding: list[float],
     summaries: list[RetrievedSummary],
     settings: Settings,
+    *,
+    author_ids: tuple[int, ...] = (),
+    time_window: TimeWindow | None = None,
 ) -> list[RetrievedChunk]:
     if not summaries or settings.aligned_chunks_max == 0:
         return []
+    filters, params = _metadata_filters(
+        "chunk",
+        author_ids=author_ids,
+        time_window=time_window,
+    )
     rows = conn.execute(
-        """
+        f"""
         WITH selected_summaries AS (
           SELECT summary_key, hour_start, hour_end
           FROM hourly_summaries
@@ -294,6 +348,7 @@ def _select_aligned_chunks(
             ON chunk.start_at < summary.hour_end
            AND chunk.end_at >= summary.hour_start
           WHERE chunk.chunk_strategy_version = %(strategy_version)s
+            {filters}
         )
         SELECT summary_key, chunk_key, chunk_text
         FROM (
@@ -312,6 +367,7 @@ def _select_aligned_chunks(
             "query_embedding": query_embedding,
             "per_summary_limit": settings.aligned_chunks_per_summary,
             "limit": settings.aligned_chunks_max,
+            **params,
         },
     ).fetchall()
     return [RetrievedChunk(str(row[1]), str(row[2]), "aligned", str(row[0])) for row in rows]
@@ -322,15 +378,24 @@ def _select_global_chunks(
     query_embedding: list[float],
     excluded_chunk_keys: list[str],
     settings: Settings,
+    *,
+    author_ids: tuple[int, ...] = (),
+    time_window: TimeWindow | None = None,
 ) -> list[RetrievedChunk]:
     if settings.global_chunk_fallback_top_k == 0:
         return []
+    filters, params = _metadata_filters(
+        "conversation_chunks",
+        author_ids=author_ids,
+        time_window=time_window,
+    )
     rows = conn.execute(
-        """
+        f"""
         SELECT chunk_key, chunk_text
         FROM conversation_chunks
         WHERE chunk_strategy_version = %(strategy_version)s
           AND NOT (chunk_key = ANY(%(excluded_chunk_keys)s))
+          {filters}
         ORDER BY embedding <=> %(query_embedding)s::vector
         LIMIT %(limit)s
         """,
@@ -339,6 +404,86 @@ def _select_global_chunks(
             "excluded_chunk_keys": excluded_chunk_keys,
             "query_embedding": query_embedding,
             "limit": settings.global_chunk_fallback_top_k,
+            **params,
         },
     ).fetchall()
     return [RetrievedChunk(str(row[0]), str(row[1]), "global") for row in rows]
+
+
+def _retrieval_attempts(
+    intent: RetrievalIntent,
+) -> list[tuple[tuple[int, ...], TimeWindow | None, str]]:
+    has_author = bool(intent.target_author_ids)
+    has_time = intent.target_time_window is not None
+    if has_author and has_time:
+        return [
+            (intent.target_author_ids, intent.target_time_window, "author_time_filter"),
+            (intent.target_author_ids, None, "author_filter"),
+            ((), intent.target_time_window, "time_filter"),
+            ((), None, ""),
+        ]
+    if has_author:
+        return [
+            (intent.target_author_ids, None, "author_filter"),
+            ((), None, ""),
+        ]
+    if has_time:
+        return [
+            ((), intent.target_time_window, "time_filter"),
+            ((), None, ""),
+        ]
+    return [((), None, "")]
+
+
+def _metadata_filters(
+    table_alias: str,
+    *,
+    author_ids: tuple[int, ...],
+    time_window: TimeWindow | None,
+) -> tuple[str, dict[str, Any]]:
+    filters = []
+    params: dict[str, Any] = {}
+    if author_ids:
+        params["author_ids"] = list(author_ids)
+        if table_alias == "hourly_summaries":
+            filters.append(
+                """
+                AND EXISTS (
+                  SELECT 1 FROM raw_messages raw
+                  WHERE raw.author_id = ANY(%(author_ids)s)
+                    AND raw.is_rag_eligible
+                    AND raw.created_at >= hourly_summaries.hour_start
+                    AND raw.created_at < hourly_summaries.hour_end
+                )
+                """
+            )
+        else:
+            filters.append(
+                f"""
+                AND EXISTS (
+                  SELECT 1 FROM raw_messages raw
+                  WHERE raw.author_id = ANY(%(author_ids)s)
+                    AND raw.is_rag_eligible
+                    AND raw.message_id >= {table_alias}.start_message_id
+                    AND raw.message_id <= {table_alias}.end_message_id
+                )
+                """
+            )
+    if time_window:
+        params["window_start"] = time_window.start_at
+        params["window_end"] = time_window.end_at
+        if table_alias == "hourly_summaries":
+            filters.append(
+                """
+                AND hourly_summaries.hour_start < %(window_end)s
+                AND hourly_summaries.hour_end > %(window_start)s
+                """
+            )
+        else:
+            filters.append(
+                f"""
+                AND {table_alias}.start_at < %(window_end)s
+                AND {table_alias}.end_at >= %(window_start)s
+                """
+            )
+    return "\n".join(filters), params

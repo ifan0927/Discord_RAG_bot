@@ -33,6 +33,7 @@ class Settings:
     router_session_turns: int = 4
     router_max_output_tokens: int = 128
     query_embedding_timeout_seconds: float = 8
+    member_lookup_timeout_seconds: float = 2
     summary_top_k: int = 3
     aligned_chunks_per_summary: int = 2
     aligned_chunks_max: int = 6
@@ -144,6 +145,7 @@ def load_settings() -> Settings:
         query_embedding_timeout_seconds=_positive_float(
             "QUERY_EMBEDDING_TIMEOUT_SECONDS", 8
         ),
+        member_lookup_timeout_seconds=_positive_float("MEMBER_LOOKUP_TIMEOUT_SECONDS", 2),
         summary_top_k=_non_negative_int("SUMMARY_TOP_K", 3),
         aligned_chunks_per_summary=_non_negative_int("ALIGNED_CHUNKS_PER_SUMMARY", 2),
         aligned_chunks_max=_non_negative_int("ALIGNED_CHUNKS_MAX", 6),

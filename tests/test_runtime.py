@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
 from decimal import Decimal
 import io
@@ -8,6 +9,7 @@ import logging
 import unittest
 
 from src.config import Settings
+from src.member_identity import MemberIdentity
 from src.runtime import (
     EMPTY_QUERY_REPLY,
     LLMResult,
@@ -86,8 +88,9 @@ class FakeStore:
     def delete_empty_session(self, session_id):
         self.deleted_sessions.append(session_id)
 
-    def retrieve_context(self, query_embedding, settings):
+    def retrieve_context(self, query_embedding, settings, intent):
         self.retrieve_calls += 1
+        self.last_retrieval_intent = intent
         return self.retrieval
 
     def load_context_by_keys(self, summary_keys, chunk_keys):
@@ -278,6 +281,122 @@ class MentionRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("- second summary\n  - second aligned chunk", prompt)
         self.assertIn("其他可能相關對話片段:\n- fallback chunk", prompt)
 
+    async def test_prompt_includes_member_identity_and_renders_context_authors(self):
+        retrieval = RetrievalContext(
+            summaries=[
+                RetrievedSummary(
+                    "summary-1",
+                    "2026-06-12 10:00:00 author:456 talked about deploys",
+                )
+            ],
+            chunks=[
+                RetrievedChunk(
+                    "chunk-1",
+                    "2026-06-12 10:01:00 author:789 mentioned postgres",
+                    "aligned",
+                    "summary-1",
+                )
+            ],
+            status="retrieved",
+        )
+        store = FakeStore(retrieval=retrieval)
+        answer = FakeAnswer("context answer")
+        runtime = MentionRuntime(
+            settings(),
+            store,
+            embedding_client=FakeEmbedding(),
+            answer_client=answer,
+            router_client=FakeRouter(),
+        )
+
+        await runtime.handle_message(
+            replace(
+                message(
+                    f"<@{BOT_ID}> <@789> 昨天有說 postgres 嗎",
+                    mentioned=True,
+                ),
+                caller_display_name="Alice",
+                mentioned_members=(MemberIdentity(789, "Bob", "payload"),),
+            ),
+            SentReplies().send,
+        )
+
+        prompt = answer.calls[0][0]
+        self.assertIn("- caller: Alice (456)", prompt)
+        self.assertIn("  - Bob (789)", prompt)
+        self.assertIn("author:Alice (456)", prompt)
+        self.assertIn("author:Bob (789)", prompt)
+        self.assertEqual(store.last_retrieval_intent.target_author_ids, (789,))
+        self.assertIsNotNone(store.last_retrieval_intent.target_time_window)
+
+    async def test_log_includes_metadata_filter_status_without_context_text(self):
+        retrieval = RetrievalContext(
+            summaries=[RetrievedSummary("summary-1", "private summary text")],
+            chunks=[RetrievedChunk("chunk-1", "private chunk text", "aligned")],
+            status="retrieved",
+            retrieval_filter_status=("author_filter_empty", "time_filter"),
+        )
+        store = FakeStore(retrieval=retrieval)
+        captured = CapturedRuntimeLogger()
+        runtime = MentionRuntime(
+            settings_with_runtime_prices(),
+            store,
+            embedding_client=FakeEmbedding(),
+            answer_client=FakeAnswer("context answer"),
+            router_client=FakeRouter(),
+            logger=captured.logger,
+        )
+
+        await runtime.handle_message(
+            replace(
+                message(
+                    f"<@{BOT_ID}> <@789> 昨天有說 postgres 嗎",
+                    mentioned=True,
+                ),
+                caller_display_name="Alice",
+                mentioned_members=(MemberIdentity(789, "Bob", "payload"),),
+            ),
+            SentReplies().send,
+        )
+
+        payload = captured.payloads()[-1]
+        self.assertEqual(payload["target_author_ids"], [789])
+        self.assertIsNotNone(payload["target_time_window"])
+        self.assertIn("mentioned_payload", payload["member_identity_status"])
+        self.assertEqual(
+            payload["retrieval_filter_status"],
+            ["author_filter_empty", "time_filter"],
+        )
+        encoded = json.dumps(payload, ensure_ascii=False)
+        self.assertNotIn("private summary text", encoded)
+        self.assertNotIn("private chunk text", encoded)
+
+    async def test_prompt_includes_unknown_member_fallback(self):
+        answer = FakeAnswer("context answer")
+        runtime = MentionRuntime(
+            settings(),
+            FakeStore(),
+            embedding_client=FakeEmbedding(),
+            answer_client=answer,
+            router_client=FakeRouter(),
+        )
+
+        await runtime.handle_message(
+            replace(
+                message(
+                    f"<@{BOT_ID}> <@789> 昨天有說 postgres 嗎",
+                    mentioned=True,
+                ),
+                mentioned_members=(MemberIdentity(789, "member:789", "fallback"),),
+                unknown_member_ids=(789,),
+            ),
+            SentReplies().send,
+        )
+
+        prompt = answer.calls[0][0]
+        self.assertIn("member:789 (789)", prompt)
+        self.assertIn("- unknown mentioned member ids:\n  - 789", prompt)
+
     async def test_successful_answer_logs_metadata_usage_router_and_cost(self):
         retrieval = RetrievalContext(
             summaries=[RetrievedSummary("summary-1", "private summary text")],
@@ -304,6 +423,10 @@ class MentionRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["event"], "runtime_request_finished")
         self.assertEqual(payload["status"], "answered")
         self.assertEqual(payload["retrieval_status"], "retrieved")
+        self.assertEqual(payload["target_author_ids"], [])
+        self.assertIsNone(payload["target_time_window"])
+        self.assertIn("caller_fallback", payload["member_identity_status"])
+        self.assertEqual(payload["retrieval_filter_status"], [])
         self.assertEqual(payload["retrieved_summary_keys"], ["summary-1"])
         self.assertEqual(payload["retrieved_chunk_keys"], ["chunk-1"])
         self.assertEqual(payload["router_decision"], "not_needed_missing_provenance")

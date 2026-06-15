@@ -13,7 +13,7 @@
 - `conversation_chunks` 與 `hourly_summaries` 由日終 batch 產生。
 - DDL 只能由明確 migration command 執行；bot 啟動與 Docker entrypoint 不自動套 schema。
 - model selection、answer/router prompt、normalization / eligibility 與 runtime structured log 合約由本文件管理；batch、CLI、migration 與 Compose 邊界見 `batch_pipeline.md`。
-- 第一版 runtime 可使用 Discord event payload 內的 member / mentions 資訊解析 display name；若 payload 不足，後續 implementation issue 可加入 runtime-only best-effort guild member lookup，但不得建立 users table、不得做背景 user sync，也不得把 display name 寫入 raw schema。
+- 第一版 runtime 可使用 Discord event payload 內的 member / mentions 資訊解析 display name；若 payload 不足，可加入 runtime-only best-effort guild member lookup，但不得建立 users table、不得做背景 user sync，也不得把 display name 寫入 raw schema。
 
 ## Mermaid Sequence
 
@@ -352,6 +352,7 @@ Normalization 不做品質評分、禁用詞清單、inside joke 清單、人格
 | `ROUTER_SESSION_TURNS` | 4 | env |
 | `ROUTER_MAX_OUTPUT_TOKENS` | 128 | env |
 | `QUERY_EMBEDDING_TIMEOUT_SECONDS` | 8 | env |
+| `MEMBER_LOOKUP_TIMEOUT_SECONDS` | 2 | env |
 | `SUMMARY_TOP_K` | 3 | env |
 | `ALIGNED_CHUNKS_PER_SUMMARY` | 2 | env |
 | `ALIGNED_CHUNKS_MAX` | 6 | env |
