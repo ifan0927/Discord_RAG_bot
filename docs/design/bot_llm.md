@@ -58,7 +58,7 @@
 
 ## 6. 工程與成本邊界
 
-- embedding model 固定為 `text-embedding-3-small`；第一版已批准 `ANSWER_MODEL=gpt-5.4-mini`、`FALLBACK_MODEL=gpt-5.4-nano`、`ROUTER_MODEL=gpt-5.4-nano`、`SUMMARY_MODEL=gpt-5.4-nano`。
+- embedding model 固定為 `text-embedding-3-small`；第一版已批准 `ANSWER_MODEL=gpt-5.4-mini`、`FALLBACK_MODEL=gpt-5.4-mini`、`ROUTER_MODEL=gpt-5.4-mini`、`SUMMARY_MODEL=gpt-5.4-mini`。
 - answer/router prompt 會以 repo 內固定文字檔管理；prompt 合約見 `runtime_flow.md`。summary prompt 約束由 `batch_pipeline.md` 記錄，第一版不做 prompt 管理系統或熱更新。
 - runtime context window、檢索數量、timeout 與 token 上限已在 `runtime_flow.md` 收斂為環境變數。
 - 第一版成本與用量觀察依 structured JSON logs 離線彙整，不先提供 Discord 內 `/usage`。
@@ -103,7 +103,7 @@
 
 ## 10. 實作前合約狀態
 
-- answer / fallback / router / summary model 名稱：已批准為 `gpt-5.4-mini` / `gpt-5.4-nano` / `gpt-5.4-nano` / `gpt-5.4-nano`；bounded trial 第一輪 real batch 允許 `text-embedding-3-small` embedding 與 `gpt-5.4-nano` summary LLM，runtime LLM calls 已接上 provider 邊界，真外部驗證需另走 ops / validation。
+- answer / fallback / router / summary model 名稱：已批准為 `gpt-5.4-mini` / `gpt-5.4-mini` / `gpt-5.4-mini` / `gpt-5.4-mini`；bounded trial 第一輪 real batch 允許 `text-embedding-3-small` embedding 與 `gpt-5.4-mini` summary LLM，runtime LLM calls 已接上 provider 邊界，真外部驗證需另走 ops / validation。
 - answer system prompt 與 router prompt：合約已收斂於 `runtime_flow.md`；實際 prompt 檔已加入 repo。
 - JSONL import 與 Discord runtime 共用的 normalization / eligibility 規則：已收斂於 `runtime_flow.md`。
 - migration command 與 CLI entrypoint 邊界：已收斂於 `batch_pipeline.md`。

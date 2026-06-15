@@ -43,17 +43,17 @@ class OpenAIRuntimeTest(unittest.TestCase):
 
     def test_summary_client_uses_responses_client_model_and_timeout(self):
         with mock.patch("src.openai_runtime.OpenAIResponsesClient") as responses:
-            responses.return_value.answer.return_value = LLMResult(text="summary", model="gpt-5.4-nano")
+            responses.return_value.answer.return_value = LLMResult(text="summary", model="gpt-5.4-mini")
             result = OpenAISummaryClient(
                 api_key="sk-test",
-                model="gpt-5.4-nano",
+                model="gpt-5.4-mini",
                 timeout_seconds=12.5,
             ).summarize("input text", max_output_tokens=300)
 
         self.assertEqual(result, "summary")
         responses.return_value.answer.assert_called_once_with(
             "input text",
-            model="gpt-5.4-nano",
+            model="gpt-5.4-mini",
             timeout_seconds=12.5,
             max_output_tokens=300,
         )

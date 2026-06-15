@@ -18,8 +18,8 @@ class Settings:
     chunk_strategy_version: str = ""
     summary_strategy_version: str = ""
     answer_model: str = "gpt-5.4-mini"
-    fallback_model: str = "gpt-5.4-nano"
-    router_model: str = "gpt-5.4-nano"
+    fallback_model: str = "gpt-5.4-mini"
+    router_model: str = "gpt-5.4-mini"
     embedding_model: str = "text-embedding-3-small"
     answer_system_prompt_path: Path = Path("prompts/answer_system.md")
     router_prompt_path: Path = Path("prompts/router_should_retrieve.md")
@@ -109,8 +109,8 @@ def load_settings() -> Settings:
         chunk_strategy_version=_required("CHUNK_STRATEGY_VERSION"),
         summary_strategy_version=_required("SUMMARY_STRATEGY_VERSION"),
         answer_model=_optional("ANSWER_MODEL", "gpt-5.4-mini"),
-        fallback_model=_optional("FALLBACK_MODEL", "gpt-5.4-nano"),
-        router_model=_optional("ROUTER_MODEL", "gpt-5.4-nano"),
+        fallback_model=_optional("FALLBACK_MODEL", "gpt-5.4-mini"),
+        router_model=_optional("ROUTER_MODEL", "gpt-5.4-mini"),
         embedding_model=_optional("EMBEDDING_MODEL", "text-embedding-3-small"),
         answer_system_prompt_path=_readable_path(
             "ANSWER_SYSTEM_PROMPT_PATH", "prompts/answer_system.md"

@@ -370,7 +370,7 @@ class BatchSummariesTest(unittest.TestCase):
             {
                 "BATCH_SUMMARY_PROVIDER": "openai",
                 "OPENAI_API_KEY": "sk-test",
-                "SUMMARY_MODEL": "gpt-5.4-nano",
+                "SUMMARY_MODEL": "gpt-5.4-mini",
                 "BATCH_PROVIDER_TIMEOUT_SECONDS": "12.5",
             },
             clear=True,
@@ -381,7 +381,7 @@ class BatchSummariesTest(unittest.TestCase):
         self.assertIs(provider, client.return_value)
         client.assert_called_once_with(
             api_key="sk-test",
-            model="gpt-5.4-nano",
+            model="gpt-5.4-mini",
             timeout_seconds=12.5,
         )
 

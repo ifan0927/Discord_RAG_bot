@@ -302,8 +302,8 @@ Normalization 不做品質評分、禁用詞清單、inside joke 清單、人格
 | 參數 | 初始值 | 調整方式 |
 |---|---|---|
 | `ANSWER_MODEL` | `gpt-5.4-mini` | env |
-| `FALLBACK_MODEL` | `gpt-5.4-nano` | env |
-| `ROUTER_MODEL` | `gpt-5.4-nano` | env |
+| `FALLBACK_MODEL` | `gpt-5.4-mini` | env |
+| `ROUTER_MODEL` | `gpt-5.4-mini` | env |
 | `EMBEDDING_MODEL` | `text-embedding-3-small` | env，但與 schema 維度耦合 |
 | `CHUNK_STRATEGY_VERSION` | required | env，缺失則啟動失敗 |
 | `SUMMARY_STRATEGY_VERSION` | required | env，缺失則啟動失敗 |
