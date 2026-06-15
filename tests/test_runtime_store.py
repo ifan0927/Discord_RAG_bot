@@ -3,7 +3,8 @@ from __future__ import annotations
 import unittest
 
 from src.config import Settings
-from src.runtime_store import PostgresRuntimeStore
+from src.runtime import RetrievedChunk, RetrievedSummary
+from src.runtime_store import PostgresRuntimeStore, _session_lock_key
 
 
 class FakeResult:
@@ -62,23 +63,29 @@ class RuntimeStoreTest(unittest.TestCase):
         self.assertEqual(params[1]["strategy_version"], "timegap-v1")
         self.assertEqual(params[1]["per_summary_limit"], 2)
 
-    def test_session_lookup_create_uses_channel_advisory_lock(self):
+    def test_session_lookup_create_uses_bigint_advisory_lock_for_discord_channel_id(self):
         fake_conn = FakeConnection()
         store = PostgresRuntimeStore("postgresql://local/test", connect=lambda _url: fake_conn)
         settings = Settings(
             bot_token="token",
             guild_id=1,
-            channel_id=2,
+            channel_id=1135190284033065033,
             session_timeout_minutes=15,
         )
 
         from datetime import datetime, timezone
 
-        store.get_or_create_active_session(2, datetime(2026, 6, 12, tzinfo=timezone.utc), settings)
+        channel_id = 1135190284033065033
+        store.get_or_create_active_session(
+            channel_id, datetime(2026, 6, 12, tzinfo=timezone.utc), settings
+        )
 
         lock_sql, lock_params = fake_conn.executions[0]
-        self.assertIn("pg_advisory_xact_lock", lock_sql)
-        self.assertEqual(lock_params["channel_id"], 2)
+        self.assertIn("pg_advisory_xact_lock(%(lock_key)s)", lock_sql)
+        self.assertEqual(lock_params["lock_key"], _session_lock_key(channel_id))
+        self.assertIsInstance(lock_params["lock_key"], int)
+        self.assertGreaterEqual(lock_params["lock_key"], -(2**63))
+        self.assertLess(lock_params["lock_key"], 2**63)
 
     def test_session_turn_update_keeps_json_payload_and_chronological_order(self):
         fake_conn = FakeConnection()
@@ -86,7 +93,7 @@ class RuntimeStoreTest(unittest.TestCase):
         settings = Settings(
             bot_token="token",
             guild_id=1,
-            channel_id=2,
+            channel_id=1135190284033065033,
             session_stored_turns=20,
         )
 
@@ -94,6 +101,7 @@ class RuntimeStoreTest(unittest.TestCase):
 
         from src.runtime import RetrievalContext, RuntimeMessage, SessionState
 
+        channel_id = 1135190284033065033
         store.append_successful_turns(
             SessionState("session-1", [], [], [], None),
             RuntimeMessage(
@@ -102,7 +110,7 @@ class RuntimeStoreTest(unittest.TestCase):
                 author_id=456,
                 raw_content="<@999> hi",
                 guild_id=1,
-                channel_id=2,
+                channel_id=channel_id,
                 is_dm=False,
                 is_thread=False,
                 is_bot_author=False,
@@ -111,19 +119,26 @@ class RuntimeStoreTest(unittest.TestCase):
             ),
             "hi",
             "hello",
-            RetrievalContext([], [], "retrieval_empty"),
-            None,
+            RetrievalContext(
+                [RetrievedSummary("summary-1", "summary text")],
+                [RetrievedChunk("chunk-1", "chunk text", "aligned")],
+                "retrieved",
+            ),
+            "hi",
             datetime(2026, 6, 12, 1, tzinfo=timezone.utc),
             settings,
         )
 
         lock_sql, lock_params = fake_conn.executions[0]
         sql, params = fake_conn.executions[1]
-        self.assertIn("pg_advisory_xact_lock", lock_sql)
-        self.assertEqual(lock_params["channel_id"], 2)
+        self.assertIn("pg_advisory_xact_lock(%(lock_key)s)", lock_sql)
+        self.assertEqual(lock_params["lock_key"], _session_lock_key(channel_id))
         self.assertIn("jsonb_agg(turn ORDER BY ord)", sql)
         self.assertIsInstance(params["new_turns"], str)
         self.assertIn('"role": "user"', params["new_turns"])
+        self.assertEqual(params["chunk_keys"], ["chunk-1"])
+        self.assertEqual(params["summary_keys"], ["summary-1"])
+        self.assertEqual(params["last_rag_query"], "hi")
 
 
 if __name__ == "__main__":
