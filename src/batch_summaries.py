@@ -18,6 +18,7 @@ from src.migration import check_schema
 
 TAIPEI = ZoneInfo("Asia/Taipei")
 EMBEDDING_DIMENSIONS = 1536
+REQUIRED_SUMMARY_LABELS = ("時間範圍:", "參與者:", "重點:", "待回查線索:")
 
 
 @dataclass(frozen=True)
@@ -433,11 +434,11 @@ def _summary_text(
     settings: SummaryBatchSettings,
     summary_provider: SummaryProvider | None,
 ) -> tuple[str, bool, bool, int]:
-    raw_text, raw_truncated = _raw_lines(messages, settings.summary_fallback_max_chars)
+    fallback_text, fallback_truncated = _fallback_summary_text(messages, settings.summary_fallback_max_chars)
     if len(messages) < settings.min_summary_llm_messages:
-        return raw_text, True, raw_truncated, 0
+        return fallback_text, True, fallback_truncated, 0
     if summary_provider is None:
-        return raw_text, True, raw_truncated, 0
+        return fallback_text, True, fallback_truncated, 0
 
     prompt_input, prompt_truncated = _raw_lines(messages, settings.summary_input_token_budget)
     error_count = 0
@@ -450,9 +451,46 @@ def _summary_text(
         except Exception:
             error_count += 1
             continue
-        if summary.strip():
+        summary = summary.strip()
+        if summary and _is_structured_summary(summary, messages):
             return summary.strip(), False, prompt_truncated, error_count
-    return raw_text, True, raw_truncated or prompt_truncated, error_count
+        error_count += 1
+    return fallback_text, True, fallback_truncated or prompt_truncated, error_count
+
+
+def _fallback_summary_text(messages: list[RawMessage], max_chars: int) -> tuple[str, bool]:
+    raw_text, raw_truncated = _raw_lines(messages, max_chars)
+    return (
+        "\n".join(
+            [
+                f"時間範圍: {_hour_range_label(messages)}",
+                f"參與者: {_author_list_label(messages)}",
+                "重點:",
+                "- 原始訊息不足或摘要失敗；保留格式化原文供回查。",
+                "待回查線索:",
+                raw_text,
+            ]
+        ),
+        raw_truncated,
+    )
+
+
+def _is_structured_summary(summary: str, messages: list[RawMessage]) -> bool:
+    if not all(label in summary for label in REQUIRED_SUMMARY_LABELS):
+        return False
+    author_tokens = {f"author:{message.author_id}" for message in messages}
+    return any(token in summary for token in author_tokens)
+
+
+def _hour_range_label(messages: list[RawMessage]) -> str:
+    hour_start = messages[0].created_at.astimezone(TAIPEI).replace(minute=0, second=0, microsecond=0)
+    hour_end = hour_start + timedelta(hours=1)
+    return f"{hour_start.strftime('%Y-%m-%d %H:%M')}-{hour_end.strftime('%H:%M')} Asia/Taipei"
+
+
+def _author_list_label(messages: list[RawMessage]) -> str:
+    author_ids = sorted({message.author_id for message in messages})
+    return ", ".join(f"author:{author_id}" for author_id in author_ids)
 
 
 def _raw_lines(messages: list[RawMessage], max_chars: int) -> tuple[str, bool]:
