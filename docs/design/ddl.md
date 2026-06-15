@@ -33,6 +33,7 @@
 - `author_id BIGINT NOT NULL`
   - 不建 users 表，不存 author name 快照。
   - 4 人規模下 debug / 顯示可由外部固定對照表或程式轉換處理。
+  - runtime 可用 Discord event payload 或 best-effort guild member lookup 取得當次 display name，但結果不寫入 raw schema，也不引入 users table / user sync lifecycle。
 
 - `raw_content TEXT NOT NULL`
   - Discord 原始文字內容。
@@ -239,6 +240,9 @@
 - chunk retrieval 必須 filter `chunk_strategy_version`。
 - summary retrieval 必須 filter `summary_strategy_version`。
 - chunk / summary vector search 使用 cosine distance `<=>`。
+- 明確 author intent 可在 retrieval query 上做 author hard filter 或 soft boost；schema 不新增 users table，實作可依 raw boundary / artifact text / existing raw author metadata 判斷候選 artifact 是否包含 target author。
+- 明確 time intent 可在 retrieval query 上做 time hard filter 或 soft boost；時間語意使用 artifact 自帶的 `start_at` / `end_at` 或 `hour_start` / `hour_end`。
+- author/time hard filter 無結果時必須降級為一般 retrieval 或 soft boost；不得把 empty result 解釋為可驗證歷史否定。
 - session 未過期時預設不重查 RAG。
 - session 若重查 RAG，必須更新：
   - `last_rag_query`
@@ -258,6 +262,8 @@
 ## 明確不做
 
 - 不建 users 表。
+- 不保存 username / nickname / display name snapshot。
+- 不做 Discord user sync lifecycle。
 - 不建多 guild / 多 channel schema。
 - 不存 token_count。
 - 不做 embedding model A/B 共存。

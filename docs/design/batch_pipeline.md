@@ -160,6 +160,7 @@ validation 最低檢查：
 
 - 每則訊息一行。
 - 每行包含 Asia/Taipei 時間、`author_id`、`normalized_content`。
+- `author_id` 是 batch artifact 的穩定作者標記；runtime prompt 組裝階段可用當次 member identity context 補充或渲染 display name，但 batch 不寫 username / nickname snapshot。
 - 上限 `CHUNK_TEXT_MAX_CHARS=8000`。
 - 超過時保留開頭與結尾，中間截斷。
 - truncation metadata 只記 manifest/log，不寫正式 artifact table。
@@ -356,6 +357,7 @@ manifest 最低欄位：
 - failed days for range runs。
 
 Batch logs、manifest 與 `errors.jsonl` 禁止寫完整 prompt、完整 retrieved text、完整 `raw_content` 或 `normalized_content`、Discord token、OpenAI API key、DB password、完整 connection string、未截斷的 provider request / response body。
+Batch logs 不記錄 display name lookup result；member identity lookup 是 runtime-only metadata 行為。
 
 `errors.jsonl` 只記：
 
