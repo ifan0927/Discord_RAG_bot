@@ -143,6 +143,7 @@ class PostgresRuntimeStore:
                 SELECT summary_key, summary_text
                 FROM hourly_summaries
                 WHERE summary_key = ANY(%(summary_keys)s)
+                ORDER BY array_position(%(summary_keys)s, summary_key)
                 """,
                 {"summary_keys": summary_keys},
             ).fetchall()
@@ -151,11 +152,12 @@ class PostgresRuntimeStore:
                 SELECT chunk_key, chunk_text
                 FROM conversation_chunks
                 WHERE chunk_key = ANY(%(chunk_keys)s)
+                ORDER BY array_position(%(chunk_keys)s, chunk_key)
                 """,
                 {"chunk_keys": chunk_keys},
             ).fetchall()
         loaded_summaries = [RetrievedSummary(str(row[0]), str(row[1])) for row in summaries]
-        loaded_chunks = [RetrievedChunk(str(row[0]), str(row[1]), "aligned") for row in chunks]
+        loaded_chunks = [RetrievedChunk(str(row[0]), str(row[1]), "global") for row in chunks]
         status = "reused" if loaded_summaries or loaded_chunks else "retrieval_context_missing"
         return RetrievalContext(loaded_summaries, loaded_chunks, status)
 
@@ -279,7 +281,8 @@ def _select_aligned_chunks(
           FROM hourly_summaries
           WHERE summary_key = ANY(%(summary_keys)s)
         ), ranked_chunks AS (
-          SELECT chunk.chunk_key,
+          SELECT summary.summary_key,
+                 chunk.chunk_key,
                  chunk.chunk_text,
                  row_number() OVER (
                    PARTITION BY summary.summary_key
@@ -292,11 +295,15 @@ def _select_aligned_chunks(
            AND chunk.end_at >= summary.hour_start
           WHERE chunk.chunk_strategy_version = %(strategy_version)s
         )
-        SELECT chunk_key, chunk_text
-        FROM ranked_chunks
-        WHERE summary_rank <= %(per_summary_limit)s
-        GROUP BY chunk_key, chunk_text
-        ORDER BY min(distance)
+        SELECT summary_key, chunk_key, chunk_text
+        FROM (
+          SELECT DISTINCT ON (chunk_key)
+                 summary_key, chunk_key, chunk_text, distance
+          FROM ranked_chunks
+          WHERE summary_rank <= %(per_summary_limit)s
+          ORDER BY chunk_key, distance
+        ) deduped
+        ORDER BY distance
         LIMIT %(limit)s
         """,
         {
@@ -307,7 +314,7 @@ def _select_aligned_chunks(
             "limit": settings.aligned_chunks_max,
         },
     ).fetchall()
-    return [RetrievedChunk(str(row[0]), str(row[1]), "aligned") for row in rows]
+    return [RetrievedChunk(str(row[1]), str(row[2]), "aligned", str(row[0])) for row in rows]
 
 
 def _select_global_chunks(

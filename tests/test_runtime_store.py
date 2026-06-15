@@ -21,9 +21,11 @@ class FakeResult:
 
 
 class FakeConnection:
-    def __init__(self, summary_rows=None):
+    def __init__(self, summary_rows=None, aligned_rows=None, chunk_rows=None):
         self.executions = []
         self.summary_rows = summary_rows or []
+        self.aligned_rows = aligned_rows or []
+        self.chunk_rows = chunk_rows or []
 
     def __enter__(self):
         return self
@@ -33,6 +35,10 @@ class FakeConnection:
 
     def execute(self, sql, params=None):
         self.executions.append((sql, params or {}))
+        if "FROM ranked_chunks" in sql:
+            return FakeResult(self.aligned_rows)
+        if "FROM conversation_chunks" in sql and "chunk_text" in sql:
+            return FakeResult(self.chunk_rows)
         if "FROM hourly_summaries" in sql and "summary_text" in sql:
             return FakeResult(self.summary_rows)
         return FakeResult([])
@@ -59,9 +65,43 @@ class RuntimeStoreTest(unittest.TestCase):
         params = [params for _sql, params in fake_conn.executions]
         self.assertIn("summary_strategy_version = %(strategy_version)s", executed_sql)
         self.assertIn("chunk_strategy_version = %(strategy_version)s", executed_sql)
+        self.assertIn("SELECT summary.summary_key", executed_sql)
         self.assertEqual(params[0]["strategy_version"], "hourly-v1")
         self.assertEqual(params[1]["strategy_version"], "timegap-v1")
         self.assertEqual(params[1]["per_summary_limit"], 2)
+
+    def test_retrieve_context_preserves_aligned_chunk_summary_relation(self):
+        fake_conn = FakeConnection(
+            summary_rows=[("summary-1", "summary text")],
+            aligned_rows=[("summary-1", "chunk-1", "chunk text")],
+        )
+        store = PostgresRuntimeStore("postgresql://local/test", connect=lambda _url: fake_conn)
+        settings = Settings(
+            bot_token="token",
+            guild_id=1,
+            channel_id=2,
+            chunk_strategy_version="timegap-v1",
+            summary_strategy_version="hourly-v1",
+        )
+
+        context = store.retrieve_context([0.1] * 1536, settings)
+
+        self.assertEqual(context.chunks[0].chunk_key, "chunk-1")
+        self.assertEqual(context.chunks[0].source, "aligned")
+        self.assertEqual(context.chunks[0].summary_key, "summary-1")
+
+    def test_load_context_by_keys_keeps_reused_chunks_global_without_provenance(self):
+        fake_conn = FakeConnection(
+            summary_rows=[("summary-1", "summary text")],
+            chunk_rows=[("chunk-1", "chunk text")],
+        )
+        store = PostgresRuntimeStore("postgresql://local/test", connect=lambda _url: fake_conn)
+
+        context = store.load_context_by_keys(["summary-1"], ["chunk-1"])
+
+        self.assertEqual(context.status, "reused")
+        self.assertEqual(context.chunks[0].source, "global")
+        self.assertIsNone(context.chunks[0].summary_key)
 
     def test_session_lookup_create_uses_bigint_advisory_lock_for_discord_channel_id(self):
         fake_conn = FakeConnection()
