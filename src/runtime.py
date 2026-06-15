@@ -59,6 +59,7 @@ class RetrievedChunk:
     chunk_key: str
     chunk_text: str
     source: str
+    summary_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -627,12 +628,22 @@ def _format_retrieval_context(retrieval: RetrievalContext) -> str:
     if not retrieval.has_context:
         return ""
     lines = ["群組背景摘要與對應片段:"]
+    aligned_by_summary: dict[str, list[RetrievedChunk]] = {}
+    ungrouped_aligned = []
+    for chunk in retrieval.chunks:
+        if chunk.source != "aligned":
+            continue
+        if chunk.summary_key:
+            aligned_by_summary.setdefault(chunk.summary_key, []).append(chunk)
+        else:
+            ungrouped_aligned.append(chunk)
     for summary in retrieval.summaries:
         lines.append(f"- {summary.summary_text}")
-    aligned = [chunk for chunk in retrieval.chunks if chunk.source == "aligned"]
-    if aligned:
+        for chunk in aligned_by_summary.get(summary.summary_key, []):
+            lines.append(f"  - {chunk.chunk_text}")
+    if ungrouped_aligned:
         lines.append("對應片段:")
-        for chunk in aligned:
+        for chunk in ungrouped_aligned:
             lines.append(f"- {chunk.chunk_text}")
     global_chunks = [chunk for chunk in retrieval.chunks if chunk.source == "global"]
     if global_chunks:

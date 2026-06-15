@@ -218,7 +218,7 @@ class MentionRuntimeTest(unittest.IsolatedAsyncioTestCase):
     async def test_new_valid_mention_retrieves_and_updates_session_after_send(self):
         retrieval = RetrievalContext(
             summaries=[RetrievedSummary("summary-1", "group summary")],
-            chunks=[RetrievedChunk("chunk-1", "group chunk", "aligned")],
+            chunks=[RetrievedChunk("chunk-1", "group chunk", "aligned", "summary-1")],
             status="retrieved",
         )
         store = FakeStore(retrieval=retrieval)
@@ -244,6 +244,39 @@ class MentionRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(store.append_calls[0][4], "explain this")
         self.assertIn("group summary", answer.calls[0][0])
         self.assertIn("group chunk", answer.calls[0][0])
+        self.assertIn("- group summary\n  - group chunk", answer.calls[0][0])
+
+    async def test_retrieval_context_keeps_global_fallback_separate(self):
+        retrieval = RetrievalContext(
+            summaries=[
+                RetrievedSummary("summary-1", "first summary"),
+                RetrievedSummary("summary-2", "second summary"),
+            ],
+            chunks=[
+                RetrievedChunk("chunk-1", "first aligned chunk", "aligned", "summary-1"),
+                RetrievedChunk("chunk-2", "second aligned chunk", "aligned", "summary-2"),
+                RetrievedChunk("chunk-3", "fallback chunk", "global"),
+            ],
+            status="retrieved",
+        )
+        store = FakeStore(retrieval=retrieval)
+        answer = FakeAnswer("context answer")
+        runtime = MentionRuntime(
+            settings(),
+            store,
+            embedding_client=FakeEmbedding(),
+            answer_client=answer,
+            router_client=FakeRouter(),
+        )
+
+        await runtime.handle_message(
+            message(f"<@{BOT_ID}> explain this", mentioned=True), SentReplies().send
+        )
+
+        prompt = answer.calls[0][0]
+        self.assertIn("- first summary\n  - first aligned chunk", prompt)
+        self.assertIn("- second summary\n  - second aligned chunk", prompt)
+        self.assertIn("其他可能相關對話片段:\n- fallback chunk", prompt)
 
     async def test_successful_answer_logs_metadata_usage_router_and_cost(self):
         retrieval = RetrievalContext(
